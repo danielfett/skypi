@@ -1,0 +1,63 @@
+files:
+  path: '/data/images/{date:%Y-%m-%d}-{mode}'
+  image: 'ndk-{timestamp:%Y-%m-%d-%H-%M-%S}.jpg'
+  timelapse: 'ndk-timelapse-{started:%Y-%m-%d-%H-%M-%S}.mp4'
+  overlay: 'ndk-overlay-{started:%Y-%m-%d-%H-%M-%S}.jpg'
+  fileslist: 'index.txt'
+  latest: '/data/images/latest.jpg'
+finish_script: 'finish.sh {mode} {fileslist} {timelapse} {overlay}'
+location: 
+  latitude: 50.8
+  longitude: 7
+  timezone: Europe/Berlin
+mqtt:
+  client_name: skypic
+  server: infopi.fritz.box
+  #topic: system/skypix/
+  topic: system/skypi/
+watchdog_reset: ['/usr/bin/sudo', '/sbin/poweroff']
+#watchdog_reset: ['test']
+modes:
+  night: # raspistill -ISO 800 -ex verylong -ss 5000000 -dt -awb cloud -a 12 --timelapse 0 -o ndk-%09d.jpg -t 999999999
+    camera:
+      resolution: [3280, 2464]
+      shutter_speed: 10000000
+      sensor_mode: 3
+      iso: 1600
+      exposure_mode: 'sports'
+      awb_mode: 'off'
+      awb_gains: [1.1, 1.1]
+      annotate_text_size: 16
+      #drc_strength: medium
+      framerate: [1, 9]
+    capture_options:
+      format: jpeg
+      burst: True
+      quality: 95
+      thumbnail: [164, 123, 50]
+    wait_between: 0.1
+    annotation: 'NDK SkyPi night {timestamp:%Y-%m-%d %H:%M:%S}'
+    overlay_cmd: 
+      init: ['convert', '-size', '3280x2464', 'xc:black', '{filename_out}']
+      iterate: ['convert', '{filename_out}', '-', '-gravity', 'center', '-compose', 'lighten', '-composite', '-format', 'jpg', '{filename_out}']
+    timelapse_cmd: ['ffmpeg', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vcodec', 'mpeg4', '-qscale:v', '5', '{filename_out}']
+    thumbnail_cmd: 
+  day: # raspistill -ISO 800 -ex verylong -ss 5000000 -dt -awb cloud -a 12 --timelapse 0 -o ndk-%09d.jpg -t 999999999
+    camera:
+      resolution: [3280, 2464]
+      annotate_text_size: 16
+      awb_mode: cloudy
+      exposure_mode: auto
+      iso: 100
+    capture_options:
+      format: jpeg
+      burst: True
+      quality: 95
+      thumbnail: [164, 123, 50]
+    wait_between: 10
+    annotation: 'NDK SkyPi day {timestamp:%Y-%m-%d %H:%M:%S}'
+    overlay_cmd: 
+      init: ['convert', '-size', '3280x2464', 'xc:white', '{filename_out}']
+      iterate: ['convert', '{filename_out}', '-', '-gravity', 'center', '-compose', 'darken', '-composite', '-format', 'jpg', '{filename_out}']
+    timelapse_cmd: ['ffmpeg', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vcodec', 'mpeg4', '-qscale:v', '5', '{filename_out}']
+

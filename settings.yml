@@ -29,7 +29,7 @@ modes:
       awb_gains: [1.1, 1.1]
       annotate_text_size: 16
       #drc_strength: medium
-      framerate: [1, 9]
+      framerate: 0.1
     capture_options:
       format: jpeg
       burst: True

@@ -21,9 +21,34 @@ from yaml import Loader, load
 
 
 class SkyPiCamera(PiCamera):
-    def __init__(self, *args, **kwargs):
+    PRESET = ["resolution", "framerate", "sensor_mode"]
+    SLEEP = 20
+
+    def __init__(self, camera_settings):
+        self.log = logging.getLogger("skypicamera")
         self.CAPTURE_TIMEOUT = 120
-        super().__init__(*args, **kwargs)
+
+        preset_items = {k: v for k, v in camera_settings.items() if k in self.PRESET}
+        postset_items = {
+            k: v for k, v in camera_settings.items() if k not in self.PRESET
+        }
+
+        for name, value in preset_items.items():
+            self.log.info(f" - camera init: setting {name} to {value}")
+
+        super().__init__(**preset_items)
+        self.log.debug("Camera activated.")
+
+        for name, value in postset_items.items():
+            self.log.info(f" - camera setting: setting {name} to {value}")
+            setattr(self, name, value)
+
+        sleep(self.SLEEP)
+
+    def close(self):
+        # fix for https://github.com/waveform80/picamera/issues/528
+        self.framerate = 1
+        super().close()
 
 
 class SkyPiRunner:
@@ -48,7 +73,6 @@ class SkyPiRunner:
         self.location = LocationInfo(**self.settings["location"])
         self.timer = Thread(target=self.watchdog_thread, daemon=True)
         self.timer.start()
-        self.calculate_event_times()
         signal.signal(signal.SIGINT, self.signal_handler)
 
     def on_message(self, client, userdata, msg):
@@ -179,31 +203,10 @@ class SkyPiRunner:
             f"Started mode {mode}\n - started: {started}\n - canonical_date: {canonical_date}\n - overlay_path: {overlay_path}\n - timelapse_path: {timelapse_path}"
         )
 
-        camera_settings = settings["camera"]
-        # Set framerate to match the intended shutter_speed
-        if "framerate" in camera_settings:
-            camera_settings["framerate"] = (
-                1 / 10
-            )  # Fraction(*camera_settings["framerate"])
-
         self.watchdog = datetime.now()
         cnt = 0
 
-        self.PRESET = ["resolution", "framerate", "sensor_mode"]
-        preset_items = {k: v for k, v in camera_settings.items() if k in self.PRESET}
-        postset_items = {
-            k: v for k, v in camera_settings.items() if k not in self.PRESET
-        }
-
-        for name, value in preset_items.items():
-            self.log.info(f" - camera init: setting {name} to {value}")
-
-        with SkyPiCamera(**preset_items) as camera:
-            self.log.debug("Camera activated.")
-
-            for name, value in postset_items.items():
-                self.log.info(f" - camera setting: setting {name} to {value}")
-                setattr(camera, name, value)
+        with SkyPiCamera(settings["camera"]) as camera:
 
             if "overlay_cmd" in settings:
                 self.log.debug("Running overlay init command")
@@ -219,7 +222,7 @@ class SkyPiRunner:
                     settings["timelapse_cmd"], filename_out=timelapse_path,
                 )
 
-            sleep(10)
+            self.watchdog = datetime.now()
 
             current_image_set = []
             stream = io.BytesIO()
@@ -304,9 +307,6 @@ class SkyPiRunner:
                     or os.path.exists("/tmp/stop-skypic")
                 ):
                     self.log.info("Finishing recording.")
-                    camera.framerate = (
-                        1  # fix for https://github.com/waveform80/picamera/issues/528
-                    )
                     break
 
                 camera.annotate_text = settings["annotation"].format(

@@ -30,6 +30,7 @@ modes:
       annotate_text_size: 16
       #drc_strength: medium
       framerate: 0.1
+      still_stats: True
     capture_options:
       format: jpeg
       burst: True
@@ -49,12 +50,17 @@ modes:
       awb_mode: cloudy
       exposure_mode: auto
       iso: 100
+      annotate_text_size: 16
+      shutter_speed: 0
+      still_stats: True
+      sensor_mode: 3
+      framerate_range: [0.5, 15]
     capture_options:
       format: jpeg
-      burst: True
+      burst: False
       quality: 95
       thumbnail: [164, 123, 50]
-    wait_between: 10
+    wait_between: 8
     annotation: 'NDK SkyPi day {timestamp:%Y-%m-%d %H:%M:%S}'
     overlay_cmd: 
       init: ['convert', '-size', '3280x2464', 'xc:white', '{filename_out}']

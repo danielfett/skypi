@@ -11,6 +11,7 @@ from queue import Empty, SimpleQueue
 from subprocess import PIPE, Popen
 from threading import Thread
 from time import sleep
+from collections import deque
 
 import paho.mqtt.client as mqtt
 import pytz
@@ -110,10 +111,17 @@ class SkyPiRunner:
                 self.run_cmd(self.settings["watchdog_reset"])
 
     def calculate_event_times(self):
+        events_yesterday = sun(
+            self.location.observer, date=date.today() - timedelta(days=1)
+        )
         events = sun(self.location.observer, date=date.today())
         events_tomorrow = sun(
             self.location.observer, date=date.today() + timedelta(days=1)
         )
+
+        self.log.info(f"Astral events yesterday")
+        for event, time in events_yesterday.items():
+            self.log.info(f" * {event} at {time}")
 
         self.log.info(f"Astral events today")
         for event, time in events.items():
@@ -128,18 +136,23 @@ class SkyPiRunner:
         if now < events["dawn"]:
             self.current_mode = "night"
             self.canonical_date = date.today() - timedelta(days=1)
+            self.last_switch = events_yesterday["dusk"]
             self.next_switch = events["dawn"]
         elif events["dawn"] <= now < events["dusk"]:
             self.current_mode = "day"
             self.canonical_date = date.today()
+            self.last_switch = events["dawn"]
             self.next_switch = events["dusk"]
         else:
             self.current_mode = "night"
             self.canonical_date = date.today()
+            self.last_switch = events["dusk"]
             self.next_switch = events_tomorrow["dawn"]
 
         self.log.info(f"new mode: '{self.current_mode}' until {self.next_switch}")
         self.publish("mode", self.current_mode or "none")
+
+        self.total_period_time = (self.next_switch - self.last_switch).total_seconds()
 
     def run(self):
         while not self.shutdown:
@@ -164,15 +177,17 @@ class SkyPiRunner:
             f"Started mode {mode}\n - started: {started}\n - canonical_date: {canonical_date}"
         )
 
+        output = SkyPiOutput(
+            self.settings["files"],
+            settings["processors"],
+            date=canonical_date,
+            mode=mode,
+            started=started,
+        )
+
         self.watchdog = datetime.now()
         with SkyPiCamera(settings["camera"]) as camera:
-            output = SkyPiOutput(
-                self.settings["files"],
-                settings["processors"],
-                date=canonical_date,
-                mode=mode,
-                started=started,
-            )
+
             self.watchdog = datetime.now()
 
             stream = io.BytesIO()
@@ -182,17 +197,13 @@ class SkyPiRunner:
             sleep(10)
             self.log.debug(f"First image: {camera.annotate_text}")
 
-            for cnt, _ in enumerate(
-                camera.capture_continuous(stream, **settings["capture_options"])
-            ):
+            for _ in camera.capture_continuous(stream, **settings["capture_options"]):
                 # Touch the watchdog
                 self.watchdog = datetime.now()
                 conversion_time = datetime.now()
 
                 # Let our subscribers know
-                self.log.debug(
-                    f"Click {cnt}! (took {(datetime.now()-image_time).seconds}s)"
-                )
+                self.log.debug(f"Click! (took {(datetime.now()-image_time).seconds}s)")
 
                 stream.truncate()
                 stream.seek(0)
@@ -205,23 +216,31 @@ class SkyPiRunner:
                 )
                 sleep(settings["wait_between"])
 
+                now_tz = datetime.now(pytz.utc)
+
                 if (
-                    datetime.now(pytz.utc) > self.next_switch
+                    now_tz > self.next_switch
                     or self.stop
                     or os.path.exists("/tmp/stop-skypic")
                 ):
                     self.log.info("Finishing recording.")
                     break
 
-                self.publish("capture_cnt", cnt)
-                self.publish("capture_exposure_speed", camera.exposure_speed / 1000000)
-                self.publish("capture_digital_gain", repr(camera.digital_gain))
-                self.publish("capture_analog_gain", repr(camera.analog_gain))
-                self.publish("capture_iso", repr(camera.iso))
-                self.publish(
-                    "capture_exposure_duration",
-                    (conversion_time - image_time).total_seconds(),
-                )
+                in_period = (now_tz - self.last_switch).total_seconds()
+                period_percent = (in_period / self.total_period_time) * 100
+
+                status = {
+                    "capture/exposure_speed": camera.exposure_speed / 1000000,
+                    "capture/iso": repr(camera.iso),
+                    "capture/exposure_duration": (
+                        conversion_time - image_time
+                    ).total_seconds(),
+                    "timing/period_percent": period_percent,
+                }
+
+                for topic, message in status.items():
+                    self.publish(topic, message)
+
                 stream.seek(0)
                 image_time = datetime.now()
                 camera.annotate_text = settings["annotation"].format(
@@ -230,13 +249,12 @@ class SkyPiRunner:
                 self.log.debug(f"Next image: {camera.annotate_text}")
 
                 try:
-                    with open('/tmp/awb_gains', 'r') as f:
-                        tup = f.read().split(' ')
+                    with open("/tmp/awb_gains", "r") as f:
+                        tup = f.read().split(" ")
                         camera.awb_gains = [float(tup[0]), float(tup[1])]
-                        print ('-------------- NEW AWB')
+                        print("-------------- NEW AWB")
                 except Exception as e:
-                    print (e)
-
+                    print(e)
 
         stream.close()
         output.close()
@@ -260,8 +278,9 @@ class SkyPiOutput:
         self.image_path = self.base_path / path_settings["image_path"]
         self.image_path.mkdir(parents=True, exist_ok=True)
 
-        self.latest_path = Path(path_settings["latest"])
-        self.latest_path_tmp = Path(path_settings["latest"] + ".tmp")
+        self.latest_path = Path(path_settings["latest_path"])
+        self.latest_image_path = self.latest_path / Path(path_settings["latest_image"])
+        self.latest_image_path_tmp = self.latest_path / Path(path_settings["latest_image"] + ".tmp")
 
         self.params = params
         self.current_image_set = []
@@ -276,15 +295,26 @@ class SkyPiOutput:
         self.init_processors(processor_settings)
 
     def init_processors(self, processor_settings):
-        processor_classes = {p.__name__: p for p in [SkyPiOverlay, SkyPiTimelapse]}
+        processor_classes = {
+            p.__name__: p for p in [SkyPiOverlay, SkyPiTimelapse, SkyPiThumbnailGif]
+        }
 
         self.processors = []
         for processor in processor_settings:
-            output_path = self.base_path / processor["output"].format(**self.params)
-            p = processor_classes[processor["class"]](processor["cmd"], output_path)
+            if processor.get('output_base', 'base') == 'latest':
+                output_base = self.latest_path
+            else:
+                output_base = self.base_path
+            p = processor_classes[processor["class"]](
+                base_path=output_base, params=self.params, **processor["options"]
+            )
             p.start()
             if processor["add_old_files"]:
-                for f in self.existing_images:
+                if type(processor["add_old_files"]) is bool:
+                    limit = 0
+                else:
+                    limit = -processor["add_old_files"]
+                for f in self.existing_images[limit:]:
                     p.add(f)
             self.processors.append(p)
 
@@ -297,8 +327,8 @@ class SkyPiOutput:
             # outfile.write(stream.read())
 
         self.log.debug("...creating symlink")
-        self.latest_path_tmp.symlink_to(filename)
-        self.latest_path_tmp.replace(self.latest_path)
+        self.latest_image_path_tmp.symlink_to(filename)
+        self.latest_image_path_tmp.replace(self.latest_image_path)
         self.log.debug("...done.")
         self.current_image_set.append(str(filename))
 
@@ -314,14 +344,19 @@ class SkyPiFileProcessor(Thread):
     BUFFER_SHUTIL_COPY = 131072
     BUFFER_PIPE = 15000000
 
-    def __init__(self, cmd, output_path, *args, **kwargs):
+    def __init__(self, base_path, params, name, cmd):
         self.log = logging.getLogger(self.LOG_ID)
-        super().__init__(*args, **kwargs)
+        super().__init__()
         self.cmd = cmd
+        self.name = name
         self.configured = cmd is not None
-        self.path = output_path
+        self.base_path = base_path
+        self.params = params
         self.queue = SimpleQueue()
         self.stop_requested = False
+
+    def get_path(self, appendix):
+        return self.base_path / appendix.format(**self.params)
 
     def run(self):
         if not self.configured:
@@ -342,11 +377,18 @@ class SkyPiFileProcessor(Thread):
 
         self.stop_cmd()
 
-    def run_cmd(self, cmd, pipe=False, **kwargs):
+    def start_cmd(self):
+        pass
+
+    def stop_cmd(self):
+        pass
+
+    def run_cmd(self, cmd, pipe=False, stdout_pipe=False, **kwargs):
         self.log.debug(f"run_cmd {cmd}, pipe={pipe}, kwargs={kwargs}")
         return Popen(
             [arg.format(**kwargs) for arg in cmd],
             stdin=PIPE if pipe else None,
+            stdout=PIPE if stdout_pipe else None,
             start_new_session=True,
         )
 
@@ -368,7 +410,7 @@ class SkyPiFileProcessor(Thread):
     def add(self, filename):
         if not self.configured:
             return
-        self.log.debug(f"Adding to {self.LOG_ID} queue: {filename}")
+        # self.log.debug(f"Adding to {self.LOG_ID} queue: {filename}")
         self.queue.put(filename)
 
     def stop(self):
@@ -378,6 +420,10 @@ class SkyPiFileProcessor(Thread):
 
 class SkyPiOverlay(SkyPiFileProcessor):
     LOG_ID = "overlay"
+
+    def __init__(self, output, **kwargs):
+        super().__init__(**kwargs)
+        self.path = self.get_path(output)
 
     def start_cmd(self):
         proc = self.run_cmd(self.cmd["init"], filename_out=self.path,)
@@ -390,12 +436,13 @@ class SkyPiOverlay(SkyPiFileProcessor):
         )
         overlay_proc.communicate()
 
-    def stop_cmd(self):
-        pass
-
 
 class SkyPiTimelapse(SkyPiFileProcessor):
     LOG_ID = "timelapse"
+
+    def __init__(self, output, **kwargs):
+        super().__init__(**kwargs)
+        self.path = self.get_path(output)
 
     def start_cmd(self):
         self.timelapse_buffer, self.timelapse_proc = self.run_cmd_buffered(
@@ -414,6 +461,32 @@ class SkyPiTimelapse(SkyPiFileProcessor):
         self.timelapse_proc.communicate()
 
 
+class SkyPiThumbnailGif(SkyPiFileProcessor):
+    LOG_ID = "thumbnailgif"
+
+    def __init__(self, output, length, repeat_last_image, **kwargs):
+        super().__init__(**kwargs)
+        self.path = self.get_path(output)
+        self.tmp_path = self.get_path("tmp_" + output)
+        self.length = length
+        self.images = deque(maxlen=self.length)
+        self.repeat_last_image = repeat_last_image
+
+    def process(self, filename):
+        proc = self.run_cmd(self.cmd["extract"], stdout_pipe=True, filename_in=filename)
+        self.images.append(proc.communicate()[0])
+        if len(self.images) == self.length:
+            proc = self.run_cmd(
+                self.cmd["convert"], pipe=True, filename_out=self.tmp_path
+            )
+            for i in self.images:
+                proc.stdin.write(i)
+            for i in range(self.repeat_last_image):
+                proc.stdin.write(self.images[-1])
+            proc.communicate()
+            self.tmp_path.replace(self.path)
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -428,7 +501,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     log_handler = logging.StreamHandler(sys.stdout)
     log_handler.setFormatter(
-        logging.Formatter("%(asctime)s \t %(levelname)s \t %(message)s")
+        logging.Formatter("%(asctime)s  %(name)s  %(levelname)s \t%(message)s")
     )
     log_handler.setLevel(logging.DEBUG if args.verbose else logging.INFO)
     logging.getLogger().addHandler(log_handler)

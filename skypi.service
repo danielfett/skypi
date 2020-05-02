@@ -1,5 +1,6 @@
 [Unit]
 Description=SkyPi Script
+After=network.target
 
 [Service]
 Type=simple
@@ -8,6 +9,10 @@ Restart=on-failure
 RestartSec=5s
 User=pi
 Group=pi
+KillMode=process
+KillSignal=SIGINT
+TimeoutStopSec=60
+
 
 [Install]
 WantedBy=multi-user.target

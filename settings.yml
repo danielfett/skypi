@@ -1,11 +1,9 @@
 files:
-  path: '/data/images/{date:%Y-%m-%d}-{mode}'
-  image: 'ndk-{timestamp:%Y-%m-%d-%H-%M-%S}.jpg'
-  timelapse: 'ndk-timelapse-{started:%Y-%m-%d-%H-%M-%S}.mp4'
-  overlay: 'ndk-overlay-{started:%Y-%m-%d-%H-%M-%S}.jpg'
+  base_path: '/data/images/{date:%Y-%m-%d}-{mode}'
+  image_path: 'images'
+  image_name: 'ndk-{timestamp:%Y-%m-%d-%H-%M-%S}.jpg'
   fileslist: 'index.txt'
   latest: '/data/images/latest.jpg'
-finish_script: 'finish.sh {mode} {fileslist} {timelapse} {overlay}'
 location: 
   latitude: 50.8
   longitude: 7
@@ -26,7 +24,7 @@ modes:
       iso: 1600
       exposure_mode: 'sports'
       awb_mode: 'off'
-      awb_gains: [1.1, 1.1]
+      awb_gains: [5.5, 5]
       annotate_text_size: 16
       #drc_strength: medium
       framerate: 0.1
@@ -38,11 +36,17 @@ modes:
       thumbnail: [164, 123, 50]
     wait_between: 0.1
     annotation: 'NDK SkyPi night {timestamp:%Y-%m-%d %H:%M:%S}'
-    overlay_cmd: 
-      init: ['convert', '-size', '3280x2464', 'xc:black', '{filename_out}']
-      iterate: ['convert', '{filename_out}', '-', '-gravity', 'center', '-compose', 'lighten', '-composite', '-format', 'jpg', '{filename_out}']
-    timelapse_cmd: ['ffmpeg', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vcodec', 'mpeg4', '-qscale:v', '5', '{filename_out}']
-    thumbnail_cmd: 
+    processors:
+      - class: SkyPiTimelapse
+        cmd: ['ffmpeg', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'scale=1640:1232', '-vcodec', 'mpeg4', '-qscale:v', '5', '{filename_out}']
+        output: 'ndk-timelapse-{started:%Y-%m-%d-%H-%M-%S}.mp4'
+        add_old_files: True
+      - class: SkyPiOverlay
+        cmd:
+          init: ['convert', '-size', '3280x2464', 'xc:black', '{filename_out}']
+          iterate: ['convert', '{filename_out}', '{filename_in}', '-gravity', 'center', '-compose', 'lighten', '-composite', '-format', 'jpg', '{filename_out}']
+        output: 'ndk-overlay-{started:%Y-%m-%d-%H-%M-%S}.jpg'
+        add_old_files: True
   day: # raspistill -ISO 800 -ex verylong -ss 5000000 -dt -awb cloud -a 12 --timelapse 0 -o ndk-%09d.jpg -t 999999999
     camera:
       resolution: [3280, 2464]
@@ -62,8 +66,15 @@ modes:
       thumbnail: [164, 123, 50]
     wait_between: 8
     annotation: 'NDK SkyPi day {timestamp:%Y-%m-%d %H:%M:%S}'
-    overlay_cmd: 
-      init: ['convert', '-size', '3280x2464', 'xc:white', '{filename_out}']
-      iterate: ['convert', '{filename_out}', '-', '-gravity', 'center', '-compose', 'darken', '-composite', '-format', 'jpg', '{filename_out}']
-    timelapse_cmd: ['ffmpeg', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vcodec', 'mpeg4', '-qscale:v', '5', '{filename_out}']
+    processors:
+      - class: SkyPiTimelapse
+        cmd: ['ffmpeg', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'scale=1640:1232', '-vcodec', 'mpeg4', '-qscale:v', '5', '{filename_out}']
+        output: 'ndk-timelapse-{started:%Y-%m-%d-%H-%M-%S}.mp4'
+        add_old_files: True
+      - class: SkyPiOverlay
+        cmd:
+          init: ['convert', '-size', '3280x2464', 'xc:white', '{filename_out}']
+          iterate: ['convert', '{filename_out}', '{filename_in}', '-gravity', 'center', '-compose', 'darken', '-composite', '-format', 'jpg', '{filename_out}']
+        output: 'ndk-overlay-{started:%Y-%m-%d-%H-%M-%S}.jpg'
+        add_old_files: True
 

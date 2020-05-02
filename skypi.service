@@ -1,0 +1,13 @@
+[Unit]
+Description=SkyPi Script
+
+[Service]
+Type=simple
+ExecStart=/home/pi/skypic/main.py /home/pi/skypic/settings.yml -v
+Restart=on-failure
+RestartSec=5s
+User=pi
+Group=pi
+
+[Install]
+WantedBy=multi-user.target

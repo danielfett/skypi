@@ -6,8 +6,8 @@ import shutil
 import signal
 import sys
 from datetime import date, datetime, timedelta
-from fractions import Fraction
-from os.path import join, exists
+from pathlib import Path
+from queue import Empty, SimpleQueue
 from subprocess import PIPE, Popen
 from threading import Thread
 from time import sleep
@@ -155,80 +155,31 @@ class SkyPiRunner:
                 self.run_mode(self.current_mode)
             self.stop = False
 
-    def get_path(self, date, mode, id, **kwargs):
-        return join(
-            self.settings["files"]["path"].format(date=date, mode=mode,),
-            self.settings["files"][id],
-        ).format(**kwargs)
-
-    def run_cmd(self, cmd, pipe=False, **kwargs):
-        self.log.debug(f"run_cmd {cmd}, pipe={pipe}, kwargs={kwargs}")
-        return Popen(
-            [arg.format(**kwargs) for arg in cmd],
-            stdin=PIPE if pipe else None,
-            start_new_session=True,
-        )
-
-    def run_cmd_buffered(self, cmd, **kwargs):
-        self.log.debug(f"run_cmd_buffered {cmd}, kwargs={kwargs}")
-        buffer = Popen(
-            ["buffer", "-m", "15000000", "-p", "40"],
-            stdin=PIPE,
-            stdout=PIPE,
-            start_new_session=True,
-        )
-        proc = Popen(
-            [arg.format(**kwargs) for arg in cmd],
-            stdin=buffer.stdout,
-            start_new_session=True,
-        )
-        return (buffer, proc)
-
     def run_mode(self, mode):
         settings = self.settings["modes"][mode]
         started = datetime.now()
         canonical_date = self.canonical_date
-        os.makedirs(
-            self.settings["files"]["path"].format(date=canonical_date, mode=mode,),
-            exist_ok=True,
-        )
-        overlay_path = self.get_path(canonical_date, mode, "overlay", started=started)
-        timelapse_path = self.get_path(
-            canonical_date, mode, "timelapse", started=started,
-        )
-        latest_path = self.settings["files"]["latest"]
-        latest_path_tmp = f"{self.settings['files']['latest']}.tmp"
 
         self.log.info(
-            f"Started mode {mode}\n - started: {started}\n - canonical_date: {canonical_date}\n - overlay_path: {overlay_path}\n - timelapse_path: {timelapse_path}"
+            f"Started mode {mode}\n - started: {started}\n - canonical_date: {canonical_date}"
         )
 
         self.watchdog = datetime.now()
-        cnt = 0
-
         with SkyPiCamera(settings["camera"]) as camera:
-
-            if "overlay_cmd" in settings:
-                self.log.debug("Running overlay init command")
-                proc = self.run_cmd(
-                    settings["overlay_cmd"]["init"], filename_out=overlay_path,
-                )
-                proc.communicate()
-                self.log.debug("...done.")
-
-            if "timelapse_cmd" in settings:
-                self.log.debug("Starting timelapse command")
-                timelapse_buffer, timelapse_proc = self.run_cmd_buffered(
-                    settings["timelapse_cmd"], filename_out=timelapse_path,
-                )
-
+            output = SkyPiOutput(
+                self.settings["files"],
+                settings["processors"],
+                date=canonical_date,
+                mode=mode,
+                started=started,
+            )
             self.watchdog = datetime.now()
 
-            current_image_set = []
             stream = io.BytesIO()
 
             image_time = datetime.now()
             camera.annotate_text = settings["annotation"].format(timestamp=image_time)
+            sleep(10)
             self.log.debug(f"First image: {camera.annotate_text}")
 
             for cnt, _ in enumerate(
@@ -243,58 +194,11 @@ class SkyPiRunner:
                     f"Click {cnt}! (took {(datetime.now()-image_time).seconds}s)"
                 )
 
-                # Prepare the image storage
-                filename = self.get_path(
-                    canonical_date, mode, "image", timestamp=image_time
-                )
-                current_image_set.append(filename)
-
-                # save image to disk
                 stream.truncate()
                 stream.seek(0)
-                with open(filename, "wb") as outfile:
-                    self.log.debug(f"Writing image to {filename}.")
-                    shutil.copyfileobj(
-                        stream, outfile, length=131072
-                    )  # arbitrary buffer size
-                    # outfile.write(stream.read())
-                    self.log.debug("...creating symlink")
-                    os.symlink(filename, latest_path_tmp)
-                    os.rename(latest_path_tmp, latest_path)
-                    self.log.debug("...done.")
-
-                # add to overlay
-                if "overlay_cmd" in settings:
-                    self.log.debug(f"Adding to overlay image {overlay_path}.")
-                    stream.seek(0)
-                    self.log.debug("...seeked")
-                    overlay_proc = self.run_cmd(
-                        settings["overlay_cmd"]["iterate"],
-                        pipe=True,
-                        filename_out=overlay_path,
-                        filename_in=filename,
-                    )
-                    self.log.debug("...command started")
-                    # overlay_proc.stdin.write(stream.read())
-                    shutil.copyfileobj(
-                        stream, overlay_proc.stdin, length=131072
-                    )  # arbitrary buffer size
-                    self.log.debug("...data copied")
-                    overlay_proc.stdin.close()
-                    self.log.debug("...done.")
-
-                # add to timelapse
-                if "timelapse_cmd" in settings:
-                    self.log.debug("Adding to timelapse...")
-                    stream.seek(0)
-                    self.log.debug("...seeked")
-                    shutil.copyfileobj(
-                        stream, timelapse_buffer.stdin, length=131072
-                    )  # arbitrary buffer size
-                    # timelapse_proc.stdin.write(stream.read())
-                    self.log.debug("...data copied")
-                    timelapse_buffer.stdin.flush()
-                    self.log.debug("...done.")
+                output.add_image(
+                    stream, timestamp=image_time,
+                )
 
                 self.log.debug(
                     f"Image conversion done (took {(datetime.now()-conversion_time).total_seconds()}s)"
@@ -309,12 +213,7 @@ class SkyPiRunner:
                     self.log.info("Finishing recording.")
                     break
 
-                camera.annotate_text = settings["annotation"].format(
-                    timestamp=image_time
-                )
-                self.log.debug(f"Next image: {camera.annotate_text} → {filename}")
                 self.publish("capture_cnt", cnt)
-                self.publish("capture_filename", filename)
                 self.publish("capture_exposure_speed", camera.exposure_speed / 1000000)
                 self.publish("capture_digital_gain", repr(camera.digital_gain))
                 self.publish("capture_analog_gain", repr(camera.analog_gain))
@@ -325,18 +224,194 @@ class SkyPiRunner:
                 )
                 stream.seek(0)
                 image_time = datetime.now()
+                camera.annotate_text = settings["annotation"].format(
+                    timestamp=image_time
+                )
+                self.log.debug(f"Next image: {camera.annotate_text}")
+
+                try:
+                    with open('/tmp/awb_gains', 'r') as f:
+                        tup = f.read().split(' ')
+                        camera.awb_gains = [float(tup[0]), float(tup[1])]
+                        print ('-------------- NEW AWB')
+                except Exception as e:
+                    print (e)
+
 
         stream.close()
-        if "timelapse_cmd" in settings:
-            timelapse_buffer.communicate()
-            timelapse_proc.communicate()
+        output.close()
 
         self.watchdog = None
         finished = datetime.now()
         self.log.info(f"Finished at {finished}; watchdog disabled.")
 
-        # save list of files
-        fileslist_path = self.get_path(canonical_date, mode, "fileslist")
+
+class DatetimeWildcard:
+    def __format__(value, format_spec):
+        return "*"
+
+
+class SkyPiOutput:
+    def __init__(self, path_settings, processor_settings, **params):
+
+        self.log = logging.getLogger("output")
+
+        self.base_path = Path(path_settings["base_path"].format(**params))
+        self.image_path = self.base_path / path_settings["image_path"]
+        self.image_path.mkdir(parents=True, exist_ok=True)
+
+        self.latest_path = Path(path_settings["latest"])
+        self.latest_path_tmp = Path(path_settings["latest"] + ".tmp")
+
+        self.params = params
+        self.current_image_set = []
+        self.image_name_pattern = path_settings["image_name"]
+
+        self.existing_images = sorted(
+            self.image_path.glob(
+                self.image_name_pattern.format(timestamp=DatetimeWildcard())
+            )
+        )
+
+        self.init_processors(processor_settings)
+
+    def init_processors(self, processor_settings):
+        processor_classes = {p.__name__: p for p in [SkyPiOverlay, SkyPiTimelapse]}
+
+        self.processors = []
+        for processor in processor_settings:
+            output_path = self.base_path / processor["output"].format(**self.params)
+            p = processor_classes[processor["class"]](processor["cmd"], output_path)
+            p.start()
+            if processor["add_old_files"]:
+                for f in self.existing_images:
+                    p.add(f)
+            self.processors.append(p)
+
+    def add_image(self, stream, timestamp):
+        filename = self.image_path / self.image_name_pattern.format(timestamp=timestamp)
+        # save image to disk
+        with open(filename, "wb") as outfile:
+            self.log.debug(f"Writing image to {filename}.")
+            shutil.copyfileobj(stream, outfile, length=131072)  # arbitrary buffer size
+            # outfile.write(stream.read())
+
+        self.log.debug("...creating symlink")
+        self.latest_path_tmp.symlink_to(filename)
+        self.latest_path_tmp.replace(self.latest_path)
+        self.log.debug("...done.")
+        self.current_image_set.append(str(filename))
+
+        for processor in self.processors:
+            processor.add(filename)
+
+    def close(self):
+        for processor in self.processors:
+            processor.stop()
+
+
+class SkyPiFileProcessor(Thread):
+    BUFFER_SHUTIL_COPY = 131072
+    BUFFER_PIPE = 15000000
+
+    def __init__(self, cmd, output_path, *args, **kwargs):
+        self.log = logging.getLogger(self.LOG_ID)
+        super().__init__(*args, **kwargs)
+        self.cmd = cmd
+        self.configured = cmd is not None
+        self.path = output_path
+        self.queue = SimpleQueue()
+        self.stop_requested = False
+
+    def run(self):
+        if not self.configured:
+            self.log.warning(f"Not starting {self.LOG_ID} command: not configured.")
+            return
+
+        self.log.debug(f"Starting {self.LOG_ID} command")
+        self.start_cmd()
+        while not self.stop_requested:
+            try:
+                next_file = self.queue.get(block=True, timeout=1)
+            except Empty:
+                pass
+            else:
+                self.log.debug(f"Processing from {self.LOG_ID} queue: {next_file}")
+                self.process(next_file)
+                self.log.debug("...done.")
+
+        self.stop_cmd()
+
+    def run_cmd(self, cmd, pipe=False, **kwargs):
+        self.log.debug(f"run_cmd {cmd}, pipe={pipe}, kwargs={kwargs}")
+        return Popen(
+            [arg.format(**kwargs) for arg in cmd],
+            stdin=PIPE if pipe else None,
+            start_new_session=True,
+        )
+
+    def run_cmd_buffered(self, cmd, **kwargs):
+        self.log.debug(f"run_cmd_buffered {cmd}, kwargs={kwargs}")
+        buffer = Popen(
+            ["buffer", "-m", str(self.BUFFER_PIPE), "-p", "40"],
+            stdin=PIPE,
+            stdout=PIPE,
+            start_new_session=True,
+        )
+        proc = Popen(
+            [arg.format(**kwargs) for arg in cmd],
+            stdin=buffer.stdout,
+            start_new_session=True,
+        )
+        return (buffer, proc)
+
+    def add(self, filename):
+        if not self.configured:
+            return
+        self.log.debug(f"Adding to {self.LOG_ID} queue: {filename}")
+        self.queue.put(filename)
+
+    def stop(self):
+        self.stop_requested = True
+        self.join()
+
+
+class SkyPiOverlay(SkyPiFileProcessor):
+    LOG_ID = "overlay"
+
+    def start_cmd(self):
+        proc = self.run_cmd(self.cmd["init"], filename_out=self.path,)
+        proc.communicate()
+
+    def process(self, filename):
+        self.log.debug(f"...adding to overlay image {self.path}.")
+        overlay_proc = self.run_cmd(
+            self.cmd["iterate"], filename_out=self.path, filename_in=filename,
+        )
+        overlay_proc.communicate()
+
+    def stop_cmd(self):
+        pass
+
+
+class SkyPiTimelapse(SkyPiFileProcessor):
+    LOG_ID = "timelapse"
+
+    def start_cmd(self):
+        self.timelapse_buffer, self.timelapse_proc = self.run_cmd_buffered(
+            self.cmd, filename_out=self.path,
+        )
+
+    def process(self, filename):
+        with open(filename, "rb") as f:
+            shutil.copyfileobj(
+                f, self.timelapse_buffer.stdin, length=self.BUFFER_SHUTIL_COPY
+            )
+            self.timelapse_buffer.stdin.flush()
+
+    def stop_cmd(self):
+        self.timelapse_buffer.communicate()
+        self.timelapse_proc.communicate()
 
 
 if __name__ == "__main__":

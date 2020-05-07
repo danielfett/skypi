@@ -5,6 +5,7 @@ import os
 import shutil
 import signal
 import sys
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from queue import Empty, SimpleQueue
@@ -160,7 +161,7 @@ class SkyPiRunner:
             if self.forced_mode is not None:
                 self.current_mode = self.forced_mode
                 self.forced_mode = None
-            if self.current_mode == None:
+            if self.current_mode is None:
                 self.log.debug("Nothing to do...")
                 sleep(60)
             elif self.current_mode in self.settings["modes"]:
@@ -264,33 +265,82 @@ class SkyPiRunner:
         self.log.info(f"Finished at {finished}; watchdog disabled.")
 
 
-class DatetimeWildcard:
-    def __format__(value, format_spec):
-        return "*"
+class DatetimeGlobWildcard:
+    def __format__(self, format_spec):
+        return re.sub(r"%[YmdHMS]", "*", format_spec)
+
+
+class DatetimeREWildcard:
+    def __format__(self, format_spec):
+        self.format_spec = format_spec
+        return "(" + re.sub(r"%[YmdHMS]", r"\d{2,4}", format_spec) + ")"
+
+
+class SkyPiFileManager:
+    def __init__(
+        self, base_path, storage_path, file_pattern, latest_path, latest_filename
+    ):
+        self.base_path = Path(base_path)
+        self.storage_path = storage_path
+        self.file_pattern = file_pattern
+
+        if latest_path is not None:
+            self.latest_path = self.base_path / latest_path
+            self.latest_path.mkdir(parents=True, exist_ok=True)
+            self.latest_filename = self.latest_path / latest_filename
+            self.latest_filename_tmp = self.latest_path / ("tmp_" + latest_filename)
+        else:
+            self.latest_path = None
+
+    def link_latest(self, filepath):
+        if self.latest_path is None:
+            return
+        self.latest_filename_tmp.symlink_to(filepath)
+        self.latest_filename_tmp.replace(self.latest_filename)
+
+    def get_filestore(self, date, mode):
+        return SkyPiFileStore(self, date, mode)
+
+
+class SkyPiFile:
+    def __init__(self, filepath, datetime):
+        self.filepath = filepath
+        self.datetime = datetime
+
+
+class SkyPiFileStore:
+    def __init__(self, manager, date, mode):
+        self.manager = manager
+        self.date = date
+        self.mode = mode
+
+        self.storage_path = self.manager.base_path / Path(
+            self.manager.storage_path.format(date=date, mode=mode)
+        )
+        self.storage_path.mkdir(parents=True, exist_ok=True)
+
+    def get_filename(self, timestamp):
+        return self.storage_path / self.manager.file_pattern.format(timestamp)
+
+    def get_existing_files(self):
+        re_wildcard = DatetimeREWildcard()
+        glob_string = self.manager.file_pattern.format(
+            timestamp=DatetimeGlobWildcard()
+        )
+        regex = self.manager.file_pattern.format(timestamp=re_wildcard)
+        existing = sorted(self.storage_path.glob(glob_string))
+
+        for f in existing:
+            timestamp = re.findall(regex, f)[0].group(0)
+            time = datetime.strptime(timestamp, re_wildcard.format_spec)
+            yield SkyPiFile(f, time)
 
 
 class SkyPiOutput:
-    def __init__(self, path_settings, processor_settings, **params):
-
+    def __init__(self, filestore_settings, processor_settings, **params):
         self.log = logging.getLogger("output")
-
-        self.base_path = Path(path_settings["base_path"].format(**params))
-        self.image_path = self.base_path / path_settings["image_path"]
-        self.image_path.mkdir(parents=True, exist_ok=True)
-
-        self.latest_path = Path(path_settings["latest_path"])
-        self.latest_image_path = self.latest_path / Path(path_settings["latest_image"])
-        self.latest_image_path_tmp = self.latest_path / Path(path_settings["latest_image"] + ".tmp")
-
-        self.params = params
-        self.current_image_set = []
-        self.image_name_pattern = path_settings["image_name"]
-
-        self.existing_images = sorted(
-            self.image_path.glob(
-                self.image_name_pattern.format(timestamp=DatetimeWildcard())
-            )
-        )
+        self.file_manager = SkyPiFileManager(**filestore_settings)
+        self.store = self.file_manager.get_filestore(**params)
 
         self.init_processors(processor_settings)
 
@@ -301,7 +351,7 @@ class SkyPiOutput:
 
         self.processors = []
         for processor in processor_settings:
-            if processor.get('output_base', 'base') == 'latest':
+            if processor.get("output_base", "base") == "latest":
                 output_base = self.latest_path
             else:
                 output_base = self.base_path
@@ -314,12 +364,12 @@ class SkyPiOutput:
                     limit = 0
                 else:
                     limit = -processor["add_old_files"]
-                for f in self.existing_images[limit:]:
+                for f in list(self.store.get_existing_files())[limit:]:
                     p.add(f)
             self.processors.append(p)
 
     def add_image(self, stream, timestamp):
-        filename = self.image_path / self.image_name_pattern.format(timestamp=timestamp)
+        filename = self.store.get_filename(timestamp)
         # save image to disk
         with open(filename, "wb") as outfile:
             self.log.debug(f"Writing image to {filename}.")
@@ -327,10 +377,8 @@ class SkyPiOutput:
             # outfile.write(stream.read())
 
         self.log.debug("...creating symlink")
-        self.latest_image_path_tmp.symlink_to(filename)
-        self.latest_image_path_tmp.replace(self.latest_image_path)
+        self.file_manager.link_latest(filename)
         self.log.debug("...done.")
-        self.current_image_set.append(str(filename))
 
         for processor in self.processors:
             processor.add(filename)

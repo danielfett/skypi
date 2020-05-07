@@ -5,6 +5,13 @@ files:
   image_name: 'ndk-{timestamp:%Y-%m-%d-%H-%M-%S}.jpg'
   fileslist: 'index.txt'
   latest_image: '/data/images/latest.jpg'
+files:
+  images:
+    base_path: '/data/images'
+    storage_path: '{date:%Y-%m-%d}-{mode}/images/'
+    file_pattern: 'ndk-{timestamp:%Y-%m-%d-%H-%M-%S}.jpg'
+    latest_path: ''
+    latest_filename: 'latest.jpg'
 location: 
   latitude: 50.8
   longitude: 7

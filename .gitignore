@@ -3,3 +3,4 @@
 .vscode/.ropeproject/objectdb
 demos/finish.sh
 demos/test.py
+.venv3

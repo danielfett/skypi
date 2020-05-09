@@ -1,17 +1,30 @@
 files:
-  base_path: '/data/images/{date:%Y-%m-%d}-{mode}'
-  latest_path: '/data/images/'
-  image_path: 'images'
-  image_name: 'ndk-{timestamp:%Y-%m-%d-%H-%M-%S}.jpg'
-  fileslist: 'index.txt'
-  latest_image: '/data/images/latest.jpg'
-files:
   images:
     base_path: '/data/images'
     storage_path: '{date:%Y-%m-%d}-{mode}/images/'
     file_pattern: 'ndk-{timestamp:%Y-%m-%d-%H-%M-%S}.jpg'
     latest_path: ''
     latest_filename: 'latest.jpg'
+  timelapse:
+    base_path: '/data/images'
+    storage_path: '{date:%Y-%m-%d}-{mode}/timelapse/'
+    file_pattern: 'ndk-{timestamp:%Y-%m-%d-%H-%M-%S}.mp4'
+    latest_path: ''
+    latest_filename: 'latest-timelapse.mp4'
+  overlay:
+    base_path: '/data/images'
+    storage_path: '{date:%Y-%m-%d}-{mode}/overlay/'
+    file_pattern: 'ndk-overlay-{timestamp:%Y-%m-%d-%H-%M-%S}.jpg'
+    latest_path: ''
+    latest_filename: 'latest-overlay.jpg'
+  animation:
+    base_path: '/data/images'
+    storage_path: '{date:%Y-%m-%d}-{mode}/animation/'
+    file_pattern: 'ndk-animation-{timestamp:%Y-%m-%d-%H-%M-%S}.gif'
+    latest_path: ''
+    latest_filename: 'latest-animation.gif'
+
+
 location: 
   latitude: 50.8
   longitude: 7
@@ -47,8 +60,9 @@ modes:
       - class: SkyPiTimelapse
         options:
           name: timelapse
-          cmd: ['ffmpeg', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'scale=1640:1232', '-vcodec', 'mpeg4', '-qscale:v', '5', '{filename_out}']
-          output: 'ndk-timelapse-{started:%Y-%m-%d-%H-%M-%S}.mp4'
+          cmd: 
+            encode: ['ffmpeg', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'scale=1640:1232', '-vcodec', 'mpeg4', '-qscale:v', '5', '{filename_out}']
+          output: timelapse
         add_old_files: True
       - class: SkyPiOverlay
         options:
@@ -56,8 +70,18 @@ modes:
           cmd:
             init: ['convert', '-size', '3280x2464', 'xc:black', '{filename_out}']
             iterate: ['convert', '{filename_out}', '{filename_in}', '-gravity', 'center', '-compose', 'lighten', '-composite', '-format', 'jpg', '{filename_out}']
-          output: 'ndk-overlay-{started:%Y-%m-%d-%H-%M-%S}.jpg'
+          output: overlay
         add_old_files: True
+      - class: SkyPiThumbnailGif
+        options: 
+          name: gif
+          cmd:
+            extract: ['exiftool', '-b', '-ThumbnailImage', '{filename_in}']
+            convert: ['ffmpeg', '-y', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'fps=7,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', '-loop', '0', '{filename_out}']
+          repeat_last_image: 10
+          length: 50
+        output: animation
+        add_old_files: 50
   day: # raspistill -ISO 800 -ex verylong -ss 5000000 -dt -awb cloud -a 12 --timelapse 0 -o ndk-%09d.jpg -t 999999999
     camera:
       resolution: [3280, 2464]
@@ -81,8 +105,9 @@ modes:
       - class: SkyPiTimelapse
         options:
           name: timelapse
-          cmd: ['ffmpeg', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'scale=1640:1232', '-vcodec', 'mpeg4', '-qscale:v', '5', '{filename_out}']
-          output: 'ndk-timelapse-{started:%Y-%m-%d-%H-%M-%S}.mp4'
+          cmd: 
+            encode: ['ffmpeg', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'scale=1640:1232', '-vcodec', 'mpeg4', '-qscale:v', '5', '{filename_out}']
+        output: timelapse
         add_old_files: True
       - class: SkyPiOverlay
         options:
@@ -90,7 +115,7 @@ modes:
           cmd:
             init: ['convert', '-size', '3280x2464', 'xc:white', '{filename_out}']
             iterate: ['convert', '{filename_out}', '{filename_in}', '-gravity', 'center', '-compose', 'darken', '-composite', '-format', 'jpg', '{filename_out}']
-          output: 'ndk-overlay-{started:%Y-%m-%d-%H-%M-%S}.jpg'
+        output: overlay
         add_old_files: True
       - class: SkyPiThumbnailGif
         options: 
@@ -98,9 +123,8 @@ modes:
           cmd:
             extract: ['exiftool', '-b', '-ThumbnailImage', '{filename_in}']
             convert: ['ffmpeg', '-y', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'fps=7,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', '-loop', '0', '{filename_out}']
-          output: 'ndk-animation.gif'
           repeat_last_image: 10
           length: 50
+        output: animation
         add_old_files: 50
-        output_base: latest
 

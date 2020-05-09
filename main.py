@@ -2,24 +2,30 @@
 import io
 import logging
 import os
+import re
 import shutil
 import signal
 import sys
-import re
+from collections import deque
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from queue import Empty, SimpleQueue
 from subprocess import PIPE, Popen
 from threading import Thread
 from time import sleep
-from collections import deque
 
 import paho.mqtt.client as mqtt
 import pytz
+from yaml import Loader, load
+
 from astral import LocationInfo
 from astral.sun import sun
-from picamera import PiCamera
-from yaml import Loader, load
+
+try:
+    from picamera import PiCamera
+except ModuleNotFoundError:
+    PiCamera = object
 
 
 class SkyPiCamera(PiCamera):
@@ -53,6 +59,32 @@ class SkyPiCamera(PiCamera):
         super().close()
 
 
+class FakeCamera:
+    def __init__(self, camera_settings):
+        pass
+
+    def __enter__(self):
+        class Cam:
+            exposure_speed = 999999
+            iso = 900
+            awb_gains = ['999', '999']
+
+            def capture_continuous(self, stream, **kwargs):
+                with open("test-image.jpg", "rb") as f:
+                    image = f.read()
+                while True:
+                    try:
+                        stream.write(image)
+                        yield
+                    finally:
+                        pass
+
+        return Cam()
+
+    def __exit__(self, *args):
+        pass
+
+
 class SkyPiRunner:
     MODE_RECALC_TIME = 120  # seconds
     WATCHDOG_TIMEOUT = timedelta(seconds=360)
@@ -76,6 +108,11 @@ class SkyPiRunner:
         self.timer = Thread(target=self.watchdog_thread, daemon=True)
         self.timer.start()
         signal.signal(signal.SIGINT, self.signal_handler)
+
+        self.file_managers = {
+            name: SkyPiFileManager(**kwargs)
+            for (name, kwargs) in self.settings["files"].items()
+        }
 
     def on_message(self, client, userdata, msg):
         base = self.settings["mqtt"]["topic"]
@@ -179,7 +216,7 @@ class SkyPiRunner:
         )
 
         output = SkyPiOutput(
-            self.settings["files"],
+            self.file_managers,
             settings["processors"],
             date=canonical_date,
             mode=mode,
@@ -195,7 +232,7 @@ class SkyPiRunner:
 
             image_time = datetime.now()
             camera.annotate_text = settings["annotation"].format(timestamp=image_time)
-            sleep(10)
+            #sleep(10)
             self.log.debug(f"First image: {camera.annotate_text}")
 
             for _ in camera.capture_continuous(stream, **settings["capture_options"]):
@@ -233,6 +270,7 @@ class SkyPiRunner:
                 status = {
                     "capture/exposure_speed": camera.exposure_speed / 1000000,
                     "capture/iso": repr(camera.iso),
+                    "capture/awb_gains": repr(camera.awb_gains),
                     "capture/exposure_duration": (
                         conversion_time - image_time
                     ).total_seconds(),
@@ -248,14 +286,6 @@ class SkyPiRunner:
                     timestamp=image_time
                 )
                 self.log.debug(f"Next image: {camera.annotate_text}")
-
-                try:
-                    with open("/tmp/awb_gains", "r") as f:
-                        tup = f.read().split(" ")
-                        camera.awb_gains = [float(tup[0]), float(tup[1])]
-                        print("-------------- NEW AWB")
-                except Exception as e:
-                    print(e)
 
         stream.close()
         output.close()
@@ -273,7 +303,7 @@ class DatetimeGlobWildcard:
 class DatetimeREWildcard:
     def __format__(self, format_spec):
         self.format_spec = format_spec
-        return "(" + re.sub(r"%[YmdHMS]", r"\d{2,4}", format_spec) + ")"
+        return "(" + re.sub(r"%[YmdHMS]", r"[0-9]{2,4}", format_spec) + ")"
 
 
 class SkyPiFileManager:
@@ -304,7 +334,7 @@ class SkyPiFileManager:
 
 class SkyPiFile:
     def __init__(self, filepath, datetime):
-        self.filepath = filepath
+        self.path = filepath
         self.datetime = datetime
 
 
@@ -320,28 +350,39 @@ class SkyPiFileStore:
         self.storage_path.mkdir(parents=True, exist_ok=True)
 
     def get_filename(self, timestamp):
-        return self.storage_path / self.manager.file_pattern.format(timestamp)
+        return self.storage_path / self.manager.file_pattern.format(timestamp=timestamp)
 
     def get_existing_files(self):
         re_wildcard = DatetimeREWildcard()
-        glob_string = self.manager.file_pattern.format(
-            timestamp=DatetimeGlobWildcard()
-        )
+        glob_string = self.manager.file_pattern.format(timestamp=DatetimeGlobWildcard())
         regex = self.manager.file_pattern.format(timestamp=re_wildcard)
         existing = sorted(self.storage_path.glob(glob_string))
 
         for f in existing:
-            timestamp = re.findall(regex, f)[0].group(0)
+            timestamp = re.findall(regex, str(f))[0]
             time = datetime.strptime(timestamp, re_wildcard.format_spec)
             yield SkyPiFile(f, time)
 
+    def link_latest(self, filename):
+        self.manager.link_latest(filename)
+
+    @contextmanager
+    def tempfile(self, timestamp):
+        tmpfile = self.storage_path / (self.manager.file_pattern + "_tmp").format(
+            timestamp
+        )
+        yield tmpfile
+        tmpfile.replace(self.get_filename(timestamp))
+
 
 class SkyPiOutput:
-    def __init__(self, filestore_settings, processor_settings, **params):
+    def __init__(self, filemanagers, processor_settings, date, mode, started):
         self.log = logging.getLogger("output")
-        self.file_manager = SkyPiFileManager(**filestore_settings)
-        self.store = self.file_manager.get_filestore(**params)
-
+        self.filemanagers = filemanagers
+        self.filestore = filemanagers["images"].get_filestore(date, mode)
+        self.started = started
+        self.date = date
+        self.mode = mode
         self.init_processors(processor_settings)
 
     def init_processors(self, processor_settings):
@@ -350,26 +391,29 @@ class SkyPiOutput:
         }
 
         self.processors = []
-        for processor in processor_settings:
-            if processor.get("output_base", "base") == "latest":
-                output_base = self.latest_path
-            else:
-                output_base = self.base_path
-            p = processor_classes[processor["class"]](
-                base_path=output_base, params=self.params, **processor["options"]
-            )
-            p.start()
-            if processor["add_old_files"]:
-                if type(processor["add_old_files"]) is bool:
-                    limit = 0
-                else:
-                    limit = -processor["add_old_files"]
-                for f in list(self.store.get_existing_files())[limit:]:
-                    p.add(f)
-            self.processors.append(p)
+        try:
+            for processor in processor_settings:
+                filestore = self.filemanagers[processor["output"]].get_filestore(
+                    self.date, self.mode
+                )
+
+                p = processor_classes[processor["class"]](
+                    filestore=filestore, started=self.started, **processor["options"]
+                )
+                p.start()
+                if processor["add_old_files"]:
+                    if type(processor["add_old_files"]) is bool:
+                        limit = 0
+                    else:
+                        limit = -processor["add_old_files"]
+                    for f in list(self.filestore.get_existing_files())[limit:]:
+                        p.add(f)
+                self.processors.append(p)
+        finally:
+            self.close()
 
     def add_image(self, stream, timestamp):
-        filename = self.store.get_filename(timestamp)
+        filename = self.filestore.get_filename(timestamp)
         # save image to disk
         with open(filename, "wb") as outfile:
             self.log.debug(f"Writing image to {filename}.")
@@ -377,11 +421,11 @@ class SkyPiOutput:
             # outfile.write(stream.read())
 
         self.log.debug("...creating symlink")
-        self.file_manager.link_latest(filename)
+        self.filestore.link_latest(filename)
         self.log.debug("...done.")
 
         for processor in self.processors:
-            processor.add(filename)
+            processor.add(SkyPiFile(filename, timestamp))
 
     def close(self):
         for processor in self.processors:
@@ -390,21 +434,22 @@ class SkyPiOutput:
 
 class SkyPiFileProcessor(Thread):
     BUFFER_SHUTIL_COPY = 131072
-    BUFFER_PIPE = 15000000
+    BUFFER_CMD = ["buffer", "-m", "15000000", "-p", "40"]
 
-    def __init__(self, base_path, params, name, cmd):
+    def __init__(self, filestore, started, name, cmd):
         self.log = logging.getLogger(self.LOG_ID)
         super().__init__()
+        self.filestore = filestore
         self.cmd = cmd
         self.name = name
         self.configured = cmd is not None
-        self.base_path = base_path
-        self.params = params
         self.queue = SimpleQueue()
         self.stop_requested = False
-
-    def get_path(self, appendix):
-        return self.base_path / appendix.format(**self.params)
+        self.started = started
+        self.path = self.filestore.get_filename(self.started)
+        self.check_cmd(self.BUFFER_CMD)
+        for _, command in self.cmd.items():
+            self.check_cmd(command)
 
     def run(self):
         if not self.configured:
@@ -431,6 +476,13 @@ class SkyPiFileProcessor(Thread):
     def stop_cmd(self):
         pass
 
+    def check_cmd(self, cmd):
+        exe = cmd[0]
+        if shutil.which(exe) is None:
+            raise Exception(
+                f"Executable for processor '{self.name}' found in path: '{exe}'"
+            )
+
     def run_cmd(self, cmd, pipe=False, stdout_pipe=False, **kwargs):
         self.log.debug(f"run_cmd {cmd}, pipe={pipe}, kwargs={kwargs}")
         return Popen(
@@ -443,10 +495,7 @@ class SkyPiFileProcessor(Thread):
     def run_cmd_buffered(self, cmd, **kwargs):
         self.log.debug(f"run_cmd_buffered {cmd}, kwargs={kwargs}")
         buffer = Popen(
-            ["buffer", "-m", str(self.BUFFER_PIPE), "-p", "40"],
-            stdin=PIPE,
-            stdout=PIPE,
-            start_new_session=True,
+            self.BUFFER_CMD, stdin=PIPE, stdout=PIPE, start_new_session=True,
         )
         proc = Popen(
             [arg.format(**kwargs) for arg in cmd],
@@ -455,11 +504,10 @@ class SkyPiFileProcessor(Thread):
         )
         return (buffer, proc)
 
-    def add(self, filename):
+    def add(self, file: SkyPiFile):
         if not self.configured:
             return
-        # self.log.debug(f"Adding to {self.LOG_ID} queue: {filename}")
-        self.queue.put(filename)
+        self.queue.put(file)
 
     def stop(self):
         self.stop_requested = True
@@ -469,36 +517,31 @@ class SkyPiFileProcessor(Thread):
 class SkyPiOverlay(SkyPiFileProcessor):
     LOG_ID = "overlay"
 
-    def __init__(self, output, **kwargs):
-        super().__init__(**kwargs)
-        self.path = self.get_path(output)
-
     def start_cmd(self):
         proc = self.run_cmd(self.cmd["init"], filename_out=self.path,)
         proc.communicate()
 
-    def process(self, filename):
+    def process(self, file: SkyPiFile):
         self.log.debug(f"...adding to overlay image {self.path}.")
         overlay_proc = self.run_cmd(
-            self.cmd["iterate"], filename_out=self.path, filename_in=filename,
+            self.cmd["iterate"], filename_out=self.path, filename_in=file.path,
         )
         overlay_proc.communicate()
+
+    def stop_cmd(self):
+        self.filestore.link_latest(self.path)
 
 
 class SkyPiTimelapse(SkyPiFileProcessor):
     LOG_ID = "timelapse"
 
-    def __init__(self, output, **kwargs):
-        super().__init__(**kwargs)
-        self.path = self.get_path(output)
-
     def start_cmd(self):
         self.timelapse_buffer, self.timelapse_proc = self.run_cmd_buffered(
-            self.cmd, filename_out=self.path,
+            self.cmd["encode"], filename_out=self.path,
         )
 
-    def process(self, filename):
-        with open(filename, "rb") as f:
+    def process(self, file: SkyPiFile):
+        with open(file.path, "rb") as f:
             shutil.copyfileobj(
                 f, self.timelapse_buffer.stdin, length=self.BUFFER_SHUTIL_COPY
             )
@@ -507,32 +550,32 @@ class SkyPiTimelapse(SkyPiFileProcessor):
     def stop_cmd(self):
         self.timelapse_buffer.communicate()
         self.timelapse_proc.communicate()
+        self.filestore.link_latest(self.path)
 
 
 class SkyPiThumbnailGif(SkyPiFileProcessor):
     LOG_ID = "thumbnailgif"
 
-    def __init__(self, output, length, repeat_last_image, **kwargs):
+    def __init__(self, length, repeat_last_image, **kwargs):
         super().__init__(**kwargs)
-        self.path = self.get_path(output)
-        self.tmp_path = self.get_path("tmp_" + output)
-        self.length = length
-        self.images = deque(maxlen=self.length)
+        self.images = deque(maxlen=length)
         self.repeat_last_image = repeat_last_image
 
-    def process(self, filename):
-        proc = self.run_cmd(self.cmd["extract"], stdout_pipe=True, filename_in=filename)
+    def process(self, file: SkyPiFile):
+        proc = self.run_cmd(self.cmd["extract"], stdout_pipe=True, filename_in=file.path)
         self.images.append(proc.communicate()[0])
-        if len(self.images) == self.length:
-            proc = self.run_cmd(
-                self.cmd["convert"], pipe=True, filename_out=self.tmp_path
-            )
+        if len(self.images) < self.images.maxlen:
+            return
+
+        with self.filestore.tempfile(self.started) as tmp_path:
+            proc = self.run_cmd(self.cmd["convert"], pipe=True, filename_out=tmp_path)
             for i in self.images:
                 proc.stdin.write(i)
             for i in range(self.repeat_last_image):
                 proc.stdin.write(self.images[-1])
             proc.communicate()
-            self.tmp_path.replace(self.path)
+
+        self.filestore.link_latest(self.path)
 
 
 if __name__ == "__main__":
@@ -546,6 +589,10 @@ if __name__ == "__main__":
         action="count",
         help="Increase debug level to show debug messages.",
     )
+    parser.add_argument("--fake-camera", action="store_true", help="Use fake camera")
+    parser.add_argument(
+        "--fake-root", action="store", help="Override storage paths to this value",
+    )
     args = parser.parse_args()
     log_handler = logging.StreamHandler(sys.stdout)
     log_handler.setFormatter(
@@ -554,9 +601,21 @@ if __name__ == "__main__":
     log_handler.setLevel(logging.DEBUG if args.verbose else logging.INFO)
     logging.getLogger().addHandler(log_handler)
     logging.getLogger().setLevel(logging.DEBUG)
+    if "fake_camera" in args or PiCamera is object:
+        logging.info("Using fake camera")
+        SkyPiCamera = FakeCamera
+
+    if "fake_root" in args:
+        logging.info("Using fake root directory")
+
+        OrigSkyPiFileManager = SkyPiFileManager
+
+        class FakeFileManager:
+            def __new__(self, base_path, **kwargs):
+                return OrigSkyPiFileManager(base_path=args.fake_root, **kwargs)
+
+        SkyPiFileManager = FakeFileManager
 
     settings = load(args.settingsfile, Loader=Loader)
     spc = SkyPiRunner(settings)
     spc.run()
-
-#

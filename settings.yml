@@ -5,24 +5,28 @@ files:
     file_pattern: 'ndk-{timestamp:%Y-%m-%d-%H-%M-%S}.jpg'
     latest_path: ''
     latest_filename: 'latest.jpg'
+    retain_days: 4
   timelapse:
     base_path: '/data/images'
     storage_path: '{date:%Y-%m-%d}-{mode}/timelapse/'
     file_pattern: 'ndk-{timestamp:%Y-%m-%d-%H-%M-%S}.mp4'
     latest_path: ''
     latest_filename: 'latest-timelapse.mp4'
+    retain_days: 15
   overlay:
     base_path: '/data/images'
     storage_path: '{date:%Y-%m-%d}-{mode}/overlay/'
     file_pattern: 'ndk-overlay-{timestamp:%Y-%m-%d-%H-%M-%S}.jpg'
     latest_path: ''
     latest_filename: 'latest-overlay.jpg'
+    retain_days: 30
   animation:
     base_path: '/data/images'
     storage_path: '{date:%Y-%m-%d}-{mode}/animation/'
-    file_pattern: 'ndk-animation-{timestamp:%Y-%m-%d-%H-%M-%S}.gif'
+    file_pattern: 'ndk-animation.gif'
     latest_path: ''
     latest_filename: 'latest-animation.gif'
+    retain_days: 1
 
 
 location: 
@@ -99,7 +103,7 @@ modes:
       burst: False
       quality: 95
       thumbnail: [328, 246, 80]
-    wait_between: 8
+    wait_between: 15
     annotation: 'NDK SkyPi day {timestamp:%Y-%m-%d %H:%M:%S} UTC'
     processors:
       - class: SkyPiTimelapse

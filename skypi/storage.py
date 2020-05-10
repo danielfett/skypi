@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -83,7 +84,7 @@ class ModeWildcard(Wildcard):
 
 
 class SkyPiFileManager:
-    uploader: Optional[SkyPiUploader]
+    uploader: Optional[SkyPiUploader] = None
 
     def __init__(
         self,
@@ -116,10 +117,18 @@ class SkyPiFileManager:
             self.uploader = SkyPiUploader(self, name, **upload)
             self.uploader.start()
 
+        # if the original files are not created with a timestamp in the
+        # file name, the "latest" file needs to be a copy, not a
+        # link!
+        self.copy_latest = "{timestamp" not in file_pattern
+
     def link_latest(self, file):
         if self.latest_path is None:
             return
-        self.latest_filename_tmp.symlink_to(file.path)
+        if not self.copy_latest:
+            self.latest_filename_tmp.symlink_to(file.path)
+        else:
+            shutil.copy(file.path, self.latest_filename_tmp)
         self.latest_filename_tmp.replace(self.latest_filename)
 
     def get_filestore(self, date, mode):
@@ -190,7 +199,7 @@ class SkyPiFileStore:
         self.manager.link_latest(file)
 
     def delete_all(self):
-        self.log.info(f"Removing files from {self.path}.")
+        self.log.debug(f"Removing files from {self.path}.")
         files = self.get_existing_files()
         for f in files:
             self.log.debug(f" - delete {f}")
@@ -212,6 +221,7 @@ class SkyPiFile:
         filestore: SkyPiFileStore,
         timestamp: Optional[datetime] = None,
         use_tempfile=False,
+        use_copy_latest=False,
     ):
         self.filestore = filestore
         self.timestamp = timestamp
@@ -221,6 +231,7 @@ class SkyPiFile:
         else:
             self.path = filestore.get_temp_file_path(timestamp=timestamp)
             self.orig_path = filestore.get_file_path(timestamp=timestamp)
+        self.use_copy_latest = use_copy_latest
 
     def finish(self):
         self.filestore.link_latest(self)
@@ -228,6 +239,9 @@ class SkyPiFile:
             return
         if self.path.exists():
             self.path.replace(self.orig_path)
+
+    def __str__(self):
+        return str(self.path)
 
 
 def fake_root(path):

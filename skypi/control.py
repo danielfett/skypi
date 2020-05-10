@@ -33,6 +33,8 @@ class SkyPiControl:
     mqtt_client: mqtt.Client
     location: LocationInfo
 
+    update_camera_settings: Dict[str, Any] = {}
+
     def __init__(self, settings: Dict[str, Any]):
         self.log = logging.getLogger()
 
@@ -48,7 +50,7 @@ class SkyPiControl:
         watchdog_timer.start()
         signal.signal(signal.SIGINT, self.signal_handler)
 
-        self.file_managers = {
+        self.file_managers: Dict[str, SkyPiFileManager] = {
             name: SkyPiFileManager(name=name, **kwargs)
             for (name, kwargs) in self.settings["files"].items()
         }
@@ -56,15 +58,23 @@ class SkyPiControl:
     def on_message(self, client, userdata, msg):
         base = self.settings["mqtt"]["topic"]
         topic = msg.topic[len(base) :]
-        payload = str(msg.payload).strip()
-        self.log.debug(f"Received MQTT message on topic {topic} containing {payload}")
+        payload = msg.payload.decode('utf-8').strip()
+        self.log.info(f"Received MQTT message on topic {topic} containing {payload}")
         if topic == "force_mode":
             self.forced_mode = payload
             self.stop = True
+        if topic.startswith("set/"):
+            setting = topic[len("set/") :]
+            try:
+                value = eval(payload)
+            except Exception as e:
+                self.log.exception(e)
+            else:
+                self.update_camera_settings[setting] = value
 
     def on_connect(self, client, userdata, flags, rc):
         base = self.settings["mqtt"]["topic"]
-        client.subscribe(f"{base}/#")
+        client.subscribe(f"{base}#")
 
     def signal_handler(self, sig, frame):
         self.log.warning("Caught Ctrl+C, stopping....")
@@ -145,7 +155,7 @@ class SkyPiControl:
                 self.run_mode(self.current_mode)
             self.stop = False
 
-        for filemanager in self.file_managers:
+        for _, filemanager in self.file_managers.items():
             filemanager.close()
 
     def run_mode(self, mode):
@@ -177,6 +187,16 @@ class SkyPiControl:
                 # Touch the watchdog
                 self.watchdog = datetime.now()
                 conversion_time = datetime.now()
+
+                # Check if we need to update the camera settings
+                for key, value in self.update_camera_settings.items():
+                    try:
+                        setattr(camera, key, value)
+                    except Exception as e:
+                        self.log.exception(e)
+                    else:
+                        self.log.info(f"Setting camera setting {key} to {repr(value)}")
+                self.update_camera_settings = {}
 
                 # Let our subscribers know
                 self.log.debug(f"Click! (took {(datetime.now()-image_time).seconds}s)")

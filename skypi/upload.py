@@ -3,14 +3,13 @@ from json import dumps, loads
 from threading import Thread
 from time import sleep
 from typing import Any, Dict, List
-from random import shuffle
 
 from skypi.common import SkyPiCommandRunner
 
 
 class SkyPiUploader(Thread, SkyPiCommandRunner):
-    RECHECK_TIME = 60  # seconds
-    ERROR_WAIT_TIME = 30
+    RECHECK_TIME = 120  # seconds
+    ERROR_WAIT_TIME = 120
     stop_requested = False
     upload_status: Dict[str, Any]
 
@@ -80,9 +79,10 @@ class SkyPiUploader(Thread, SkyPiCommandRunner):
                 if self.canonicalize(file) not in self.upload_status["uploaded"]:
                     files.append(file)
 
-        # Randomize the order of returned files to prevent that a single faulty file
-        # (too large? wrong format? empty?) stops the upload queue.
-        shuffle(files)
+        # Reverse the order of returned files to prevent that a single faulty file
+        # (too large? wrong format? empty?) stops the upload queue. Upload latest
+        # file first
+        files.reverse()
         return files
 
     def stop(self):

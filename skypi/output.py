@@ -24,20 +24,20 @@ class SkyPiOutput:
         self.image_processor = SkyPiImageProcessor(
             filemanagers["images"].get_filestore(date, mode)
         )
-        self.processors: List[SkyPiFileProcessor] = []
         self.processor_classes = {
             cls.__name__: cls for cls in SkyPiFileProcessor.__subclasses__()
         }
         self.init_processors(processor_settings)
 
     def init_processors(self, processor_settings: List[Dict]):
-        self.processors = []
+        self.processors: List[SkyPiFileProcessor] = []
         try:
             for settings in processor_settings:
                 p = self.create_processor(**settings)
                 self.processors.append(p)
-        finally:
+        except Exception:
             self.close()
+            raise
 
         for processor in self.processors:
             processor.start()

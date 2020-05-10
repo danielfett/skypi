@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/home/pi/skypic/main.py settings.yml -v
+ExecStart=/home/pi/skypic/main.py settings.yml
 Restart=on-failure
 RestartSec=5s
 User=pi

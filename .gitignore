@@ -5,3 +5,6 @@ demos/finish.sh
 demos/test.py
 .venv3
 .mypy_cache
+__pycache__
+client_secrets.json
+request.token

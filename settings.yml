@@ -14,7 +14,7 @@ files:
     latest_filename: 'latest-timelapse.mp4'
     retain_days: 30
     upload:
-      cmd: ['youtubeuploader_linux_arm7', '-filename', '{filename}', '-description', 'Automatic recording of the {mode} sky over Niederkassel. Recorded on {date:%Y-%m-%d}. Recorded using a raspberry pi and a wide-angle camera.', '-title', '{mode} sky over Niederkassel: {date:%Y-%m-%d}']
+      cmd: ['/usr/local/bin/youtubeuploader_linux_armv7', '-filename', '{filename}', '-description', 'Automatic recording of the {mode} sky over Niederkassel. Recorded on {date:%Y-%m-%d}. Recorded using a raspberry pi and a wide-angle camera.', '-title', '{mode} sky over Niederkassel: {date:%Y-%m-%d}']
   overlay:
     base_path: '/data/images'
     storage_path: '{date:%Y-%m-%d}-{mode}/'
@@ -67,7 +67,7 @@ modes:
         options:
           name: timelapse
           cmd: 
-            encode: ['ffmpeg', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'scale=1640:1232', '-vcodec', 'mpeg4', '-qscale:v', '5', '-f', 'mp4', '{filename_out}']
+            encode: ['ffmpeg', '-hide_banner', '-loglevel', 'panic', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'scale=1640:1232', '-vcodec', 'mpeg4', '-qscale:v', '5', '-f', 'mp4', '{filename_out}']
           output: timelapse
       - cls: SkyPiOverlay
         options:
@@ -81,7 +81,7 @@ modes:
           name: gif
           cmd:
             extract: ['exiftool', '-b', '-ThumbnailImage', '{filename_in}']
-            convert: ['ffmpeg', '-y', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'fps=7,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', '-loop', '0', '{filename_out}']
+            convert: ['ffmpeg', '-hide_banner', '-loglevel', 'panic', '-y', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'fps=7,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', '-loop', '0', '{filename_out}']
           repeat_last_image: 10
           length: 50
         output: animation
@@ -97,6 +97,7 @@ modes:
       still_stats: True
       sensor_mode: 3
       framerate_range: [0.5, 15]
+      drc_strength: high
     capture_options:
       format: jpeg
       burst: False
@@ -109,7 +110,7 @@ modes:
         options:
           name: timelapse
           cmd: 
-            encode: ['ffmpeg', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'scale=1640:1232', '-vcodec', 'mpeg4', '-qscale:v', '5', '-f', 'mp4', '{filename_out}']
+            encode: ['ffmpeg', '-hide_banner', '-loglevel', 'panic', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'scale=1640:1232', '-vcodec', 'mpeg4', '-qscale:v', '5', '-f', 'mp4', '{filename_out}']
         output: timelapse
       - cls: SkyPiOverlay
         options:
@@ -123,7 +124,7 @@ modes:
           name: gif
           cmd:
             extract: ['exiftool', '-b', '-ThumbnailImage', '{filename_in}']
-            convert: ['ffmpeg', '-y', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'fps=7,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', '-loop', '0', '{filename_out}']
+            convert: ['ffmpeg', '-hide_banner', '-loglevel', 'panic', '-y', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'fps=7,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', '-loop', '0', '-f', 'gif', '{filename_out}']
           repeat_last_image: 10
           length: 50
         output: animation

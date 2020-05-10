@@ -10,7 +10,7 @@
             "request": "launch",
             "program": "main.py",
             "console": "integratedTerminal",
-            "args": ["--fake-root", "/tmp/empty-images-1", "settings.yml", "-v"]
+            "args": ["settings.yml", "-v"] // "--fake-root", "/tmp/empty-images-1"
         }
     ]
 }

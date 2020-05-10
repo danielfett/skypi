@@ -4,3 +4,4 @@
 demos/finish.sh
 demos/test.py
 .venv3
+.mypy_cache

@@ -1,16 +1,19 @@
+from __future__ import annotations
+
 import logging
 import re
-from contextlib import contextmanager
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
+
+#from .upload import SkyPiUploader
 
 
-def get_files_for_pattern(base_path, pattern, placeholders, type):
+def get_files_for_pattern(base_path, pattern, placeholders, type, **type_extra_args):
     # find the number of path segments in the pattern
     p = Path(pattern)
     segments_to_compare = len(p.parts)
-    
+
     # normalize pattern if it is a path (might end with /)
     pattern_normalized = str(p)
 
@@ -30,7 +33,7 @@ def get_files_for_pattern(base_path, pattern, placeholders, type):
             )
         else:
             yield type(
-                path=f,
+                **type_extra_args,
                 **{
                     name: wildcard.value(match)
                     for name, wildcard in placeholders.items()
@@ -38,23 +41,14 @@ def get_files_for_pattern(base_path, pattern, placeholders, type):
             )
 
 
-@dataclass
-class SkyPiFile:
-    path: Path
-    timestamp: datetime
+class Wildcard:
+    format_spec = None
 
-
-@dataclass
-class SkyPiFolder:
-    path: Path
-    mode: str
-    date: datetime
-
-
-class DatetimeWildcard:
     def id(self):
-        return f"dtr{id(self)}"
+        return f"regroup{id(self)}"
 
+
+class DatetimeWildcard(Wildcard):
     class GlobWildcard:
         def __format__(self, format_spec):
             twos = re.sub(r"%[mdHMS]", "??", format_spec)
@@ -68,13 +62,12 @@ class DatetimeWildcard:
         return f"(?P<{self.id()}>{fours})"
 
     def value(self, match):
+        if self.format_spec is None:
+            return None
         return datetime.strptime(match.group(self.id()), self.format_spec)
 
 
-class ModeWildcard:
-    def id(self):
-        return f"mr{id(self)}"
-
+class ModeWildcard(Wildcard):
     class GlobWildcard:
         def __format__(self, format_spec):
             return "*"
@@ -84,10 +77,14 @@ class ModeWildcard:
         return f"(?P<{self.id()}>day|night)"
 
     def value(self, match):
+        if self.format_spec is None:
+            return None
         return match.group(self.id())
 
 
 class SkyPiFileManager:
+    uploader: Optional[SkyPiUploader]
+
     def __init__(
         self,
         base_path,
@@ -96,6 +93,7 @@ class SkyPiFileManager:
         latest_path,
         latest_filename,
         retain_days=None,
+        upload=None,
     ):
         self.log = logging.getLogger("filemanager")
         self.base_path = Path(base_path)
@@ -113,10 +111,13 @@ class SkyPiFileManager:
         if retain_days is not None:
             self.cleanup(retain_days)
 
-    def link_latest(self, filepath):
+        #if upload:
+        #    self.uploader = SkyPiUploader(self, self.upload)
+
+    def link_latest(self, file):
         if self.latest_path is None:
             return
-        self.latest_filename_tmp.symlink_to(filepath)
+        self.latest_filename_tmp.symlink_to(file.path)
         self.latest_filename_tmp.replace(self.latest_filename)
 
     def get_filestore(self, date, mode):
@@ -132,6 +133,7 @@ class SkyPiFileManager:
             self.storage_path,
             placeholders=placeholders,
             type=SkyPiFolder,
+            filemanager=self,
         )
 
     def cleanup(self, retain_days):
@@ -155,8 +157,16 @@ class SkyPiFileStore:
         )
         self.storage_path.mkdir(parents=True, exist_ok=True)
 
-    def get_filename(self, timestamp):
+    def get_storage_path(self) -> Path:
+        return self.storage_path
+
+    def get_file_path(self, timestamp) -> Path:
         return self.storage_path / self.manager.file_pattern.format(timestamp=timestamp)
+
+    def get_temp_file_path(self, timestamp) -> Path:
+        return self.storage_path / (self.manager.file_pattern + "_tmp").format(
+            timestamp
+        )
 
     def get_existing_files(self):
         placeholders = {
@@ -167,18 +177,11 @@ class SkyPiFileStore:
             self.manager.file_pattern,
             placeholders=placeholders,
             type=SkyPiFile,
+            filestore=self,
         )
 
-    def link_latest(self, filename):
-        self.manager.link_latest(filename)
-
-    @contextmanager
-    def tempfile(self, timestamp):
-        tmpfile = self.storage_path / (self.manager.file_pattern + "_tmp").format(
-            timestamp
-        )
-        yield tmpfile
-        tmpfile.replace(self.get_filename(timestamp))
+    def link_latest(self, file: SkyPiFile):
+        self.manager.link_latest(file)
 
     def delete_all(self):
         self.log.info(f"Removing files from {self.storage_path}.")
@@ -191,6 +194,47 @@ class SkyPiFileStore:
         except OSError as e:
             if e.errno != 39:  # Directory not empty
                 raise
+
+
+class SkyPiFile:
+    filestore: SkyPiFileStore
+    path: Path
+    timestamp: Optional[datetime]
+
+    def __init__(
+        self,
+        filestore: SkyPiFileStore,
+        timestamp: Optional[datetime] = None,
+        use_tempfile=False,
+    ):
+        self.filestore = filestore
+        self.timestamp = timestamp
+        if not use_tempfile:
+            self.path = filestore.get_file_path(timestamp=timestamp)
+            self.orig_path = None
+        else:
+            self.path = filestore.get_temp_file_path(timestamp=timestamp)
+            self.orig_path = filestore.get_file_path(timestamp=timestamp)
+
+    def finish(self):
+        self.filestore.link_latest(self)
+        if self.orig_path is None:
+            return
+        if self.path.exists():
+            self.path.replace(self.orig_path)
+
+
+class SkyPiFolder:
+    filemanager: SkyPiFileManager
+    path: Path
+    mode: str
+    date: datetime
+
+    def __init__(self, filemanager: SkyPiFileManager, date: datetime, mode: str):
+        self.date = date
+        self.mode = mode
+        self.filemanager = filemanager
+        self.path = filemanager.get_filestore(date=date, mode=mode).get_storage_path()
 
 
 def fake_root(path):

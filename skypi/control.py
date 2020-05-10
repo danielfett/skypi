@@ -150,7 +150,6 @@ class SkyPiControl:
             settings["processors"],
             date=canonical_date,
             mode=mode,
-            started=started,
         )
 
         self.watchdog = datetime.now()

@@ -6,23 +6,25 @@ files:
     latest_path: ''
     latest_filename: 'latest.jpg'
     retain_days: 4
+    upload:
+      cmd: ['cp', '{filename}', '/tmp/upload/{mode}-{date:%Y-%m-%d}-{filename}']
   timelapse:
     base_path: '/data/images'
-    storage_path: '{date:%Y-%m-%d}-{mode}/timelapse/'
-    file_pattern: 'ndk-{timestamp:%Y-%m-%d-%H-%M-%S}.mp4'
+    storage_path: '{date:%Y-%m-%d}-{mode}/'
+    file_pattern: 'ndk-timelapse.mp4'
     latest_path: ''
     latest_filename: 'latest-timelapse.mp4'
     retain_days: 15
   overlay:
     base_path: '/data/images'
-    storage_path: '{date:%Y-%m-%d}-{mode}/overlay/'
-    file_pattern: 'ndk-overlay-{timestamp:%Y-%m-%d-%H-%M-%S}.jpg'
+    storage_path: '{date:%Y-%m-%d}-{mode}/'
+    file_pattern: 'ndk-overlay.jpg'
     latest_path: ''
     latest_filename: 'latest-overlay.jpg'
     retain_days: 30
   animation:
     base_path: '/data/images'
-    storage_path: '{date:%Y-%m-%d}-{mode}/animation/'
+    storage_path: '{date:%Y-%m-%d}-{mode}/'
     file_pattern: 'ndk-animation.gif'
     latest_path: ''
     latest_filename: 'latest-animation.gif'
@@ -61,22 +63,20 @@ modes:
     wait_between: 0.1
     annotation: 'NDK SkyPi night {timestamp:%Y-%m-%d %H:%M:%S} UTC'
     processors:
-      - class: SkyPiTimelapse
+      - cls: SkyPiTimelapse
         options:
           name: timelapse
           cmd: 
-            encode: ['ffmpeg', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'scale=1640:1232', '-vcodec', 'mpeg4', '-qscale:v', '5', '{filename_out}']
+            encode: ['ffmpeg', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'scale=1640:1232', '-vcodec', 'mpeg4', '-qscale:v', '5', '-f', 'mp4', '{filename_out}']
           output: timelapse
-        add_old_files: True
-      - class: SkyPiOverlay
+      - cls: SkyPiOverlay
         options:
           name: overlay
           cmd:
             init: ['convert', '-size', '3280x2464', 'xc:black', '{filename_out}']
             iterate: ['convert', '{filename_out}', '{filename_in}', '-gravity', 'center', '-compose', 'lighten', '-composite', '-format', 'jpg', '{filename_out}']
           output: overlay
-        add_old_files: True
-      - class: SkyPiThumbnailGif
+      - cls: SkyPiThumbnailGif
         options: 
           name: gif
           cmd:
@@ -85,7 +85,6 @@ modes:
           repeat_last_image: 10
           length: 50
         output: animation
-        add_old_files: 50
   day: # raspistill -ISO 800 -ex verylong -ss 5000000 -dt -awb cloud -a 12 --timelapse 0 -o ndk-%09d.jpg -t 999999999
     camera:
       resolution: [3280, 2464]
@@ -106,22 +105,20 @@ modes:
     wait_between: 15
     annotation: 'NDK SkyPi day {timestamp:%Y-%m-%d %H:%M:%S} UTC'
     processors:
-      - class: SkyPiTimelapse
+      - cls: SkyPiTimelapse
         options:
           name: timelapse
           cmd: 
-            encode: ['ffmpeg', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'scale=1640:1232', '-vcodec', 'mpeg4', '-qscale:v', '5', '{filename_out}']
+            encode: ['ffmpeg', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'scale=1640:1232', '-vcodec', 'mpeg4', '-qscale:v', '5', '-f', 'mp4', '{filename_out}']
         output: timelapse
-        add_old_files: True
-      - class: SkyPiOverlay
+      - cls: SkyPiOverlay
         options:
           name: overlay
           cmd:
             init: ['convert', '-size', '3280x2464', 'xc:white', '{filename_out}']
             iterate: ['convert', '{filename_out}', '{filename_in}', '-gravity', 'center', '-compose', 'darken', '-composite', '-format', 'jpg', '{filename_out}']
         output: overlay
-        add_old_files: True
-      - class: SkyPiThumbnailGif
+      - cls: SkyPiThumbnailGif
         options: 
           name: gif
           cmd:
@@ -130,5 +127,4 @@ modes:
           repeat_last_image: 10
           length: 50
         output: animation
-        add_old_files: 50
 

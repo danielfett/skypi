@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-#from .upload import SkyPiUploader
+from .upload import SkyPiUploader
 
 
 def get_files_for_pattern(base_path, pattern, placeholders, type, **type_extra_args):
@@ -87,6 +87,7 @@ class SkyPiFileManager:
 
     def __init__(
         self,
+        name,
         base_path,
         storage_path,
         file_pattern,
@@ -95,7 +96,7 @@ class SkyPiFileManager:
         retain_days=None,
         upload=None,
     ):
-        self.log = logging.getLogger("filemanager")
+        self.log = logging.getLogger(f"filemanager '{name}'")
         self.base_path = Path(base_path)
         self.storage_path = storage_path
         self.file_pattern = file_pattern
@@ -111,8 +112,9 @@ class SkyPiFileManager:
         if retain_days is not None:
             self.cleanup(retain_days)
 
-        #if upload:
-        #    self.uploader = SkyPiUploader(self, self.upload)
+        if upload:
+            self.uploader = SkyPiUploader(self, name, **upload)
+            self.uploader.start()
 
     def link_latest(self, file):
         if self.latest_path is None:
@@ -132,8 +134,8 @@ class SkyPiFileManager:
             self.base_path,
             self.storage_path,
             placeholders=placeholders,
-            type=SkyPiFolder,
-            filemanager=self,
+            type=SkyPiFileStore,
+            manager=self,
         )
 
     def cleanup(self, retain_days):
@@ -144,36 +146,40 @@ class SkyPiFileManager:
             if file.date < cutoff:
                 self.get_filestore(date=file.date, mode=file.mode).delete_all()
 
+    def close(self):
+        if self.uploader is not None:
+            self.uploader.stop()
+
 
 class SkyPiFileStore:
+    manager: SkyPiFileManager
+    date: datetime
+    mode: str
+    path: Path
+
     def __init__(self, manager, date, mode):
         self.manager = manager
         self.date = date
         self.mode = mode
         self.log = logging.getLogger("filestore")
 
-        self.storage_path = self.manager.base_path / Path(
+        self.path = self.manager.base_path / Path(
             self.manager.storage_path.format(date=date, mode=mode)
         )
-        self.storage_path.mkdir(parents=True, exist_ok=True)
-
-    def get_storage_path(self) -> Path:
-        return self.storage_path
+        self.path.mkdir(parents=True, exist_ok=True)
 
     def get_file_path(self, timestamp) -> Path:
-        return self.storage_path / self.manager.file_pattern.format(timestamp=timestamp)
+        return self.path / self.manager.file_pattern.format(timestamp=timestamp)
 
     def get_temp_file_path(self, timestamp) -> Path:
-        return self.storage_path / (self.manager.file_pattern + "_tmp").format(
-            timestamp
-        )
+        return self.path / (self.manager.file_pattern + "_tmp").format(timestamp)
 
     def get_existing_files(self):
         placeholders = {
             "timestamp": DatetimeWildcard(),
         }
         return get_files_for_pattern(
-            self.storage_path,
+            self.path,
             self.manager.file_pattern,
             placeholders=placeholders,
             type=SkyPiFile,
@@ -184,13 +190,13 @@ class SkyPiFileStore:
         self.manager.link_latest(file)
 
     def delete_all(self):
-        self.log.info(f"Removing files from {self.storage_path}.")
+        self.log.info(f"Removing files from {self.path}.")
         files = self.get_existing_files()
         for f in files:
             self.log.debug(f" - delete {f}")
             f.path.unlink()
         try:
-            self.storage_path.rmdir()
+            self.path.rmdir()
         except OSError as e:
             if e.errno != 39:  # Directory not empty
                 raise
@@ -222,19 +228,6 @@ class SkyPiFile:
             return
         if self.path.exists():
             self.path.replace(self.orig_path)
-
-
-class SkyPiFolder:
-    filemanager: SkyPiFileManager
-    path: Path
-    mode: str
-    date: datetime
-
-    def __init__(self, filemanager: SkyPiFileManager, date: datetime, mode: str):
-        self.date = date
-        self.mode = mode
-        self.filemanager = filemanager
-        self.path = filemanager.get_filestore(date=date, mode=mode).get_storage_path()
 
 
 def fake_root(path):

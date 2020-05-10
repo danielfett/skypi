@@ -4,6 +4,7 @@ import signal
 from datetime import date, datetime, timedelta
 from threading import Thread
 from time import sleep
+from typing import Any, Dict, Optional
 
 import paho.mqtt.client as mqtt
 import pytz
@@ -16,15 +17,23 @@ from .storage import SkyPiFileManager
 
 
 class SkyPiControl:
-    MODE_RECALC_TIME = 120  # seconds
+    MODE_RECALC_TIME: int = 120  # seconds
     WATCHDOG_TIMEOUT = timedelta(seconds=360)
-    current_mode = None
+
     stop = False
     shutdown = False
-    watchdog = None
-    forced_mode = None
 
-    def __init__(self, settings):
+    current_mode: Optional[str] = None
+    forced_mode: Optional[str] = None
+
+    watchdog: Optional[datetime] = None
+    file_managers: Dict[str, SkyPiFileManager]
+
+    log: logging.Logger
+    mqtt_client: mqtt.Client
+    location: LocationInfo
+
+    def __init__(self, settings: Dict[str, Any]):
         self.log = logging.getLogger()
 
         self.settings = settings
@@ -35,12 +44,12 @@ class SkyPiControl:
         self.mqtt_client.loop_start()
 
         self.location = LocationInfo(**self.settings["location"])
-        self.timer = Thread(target=self.watchdog_thread, daemon=True)
-        self.timer.start()
+        watchdog_timer = Thread(target=self.watchdog_thread, daemon=True)
+        watchdog_timer.start()
         signal.signal(signal.SIGINT, self.signal_handler)
 
         self.file_managers = {
-            name: SkyPiFileManager(**kwargs)
+            name: SkyPiFileManager(name=name, **kwargs)
             for (name, kwargs) in self.settings["files"].items()
         }
 
@@ -136,6 +145,9 @@ class SkyPiControl:
                 self.run_mode(self.current_mode)
             self.stop = False
 
+        for filemanager in self.file_managers:
+            filemanager.close()
+
     def run_mode(self, mode):
         settings = self.settings["modes"][mode]
         started = datetime.now()
@@ -146,10 +158,7 @@ class SkyPiControl:
         )
 
         output = SkyPiOutput(
-            self.file_managers,
-            settings["processors"],
-            date=canonical_date,
-            mode=mode,
+            self.file_managers, settings["processors"], date=canonical_date, mode=mode,
         )
 
         self.watchdog = datetime.now()

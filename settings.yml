@@ -6,15 +6,15 @@ files:
     latest_path: ''
     latest_filename: 'latest.jpg'
     retain_days: 4
-    upload:
-      cmd: ['cp', '{filename}', '/tmp/upload/{mode}-{date:%Y-%m-%d}-{filename}']
   timelapse:
     base_path: '/data/images'
     storage_path: '{date:%Y-%m-%d}-{mode}/'
     file_pattern: 'ndk-timelapse.mp4'
     latest_path: ''
     latest_filename: 'latest-timelapse.mp4'
-    retain_days: 15
+    retain_days: 30
+    upload:
+      cmd: ['youtubeuploader_linux_arm7', '-filename', '{filename}', '-description', 'Automatic recording of the {mode} sky over Niederkassel. Recorded on {date:%Y-%m-%d}. Recorded using a raspberry pi and a wide-angle camera.', '-title', '{mode} sky over Niederkassel: {date:%Y-%m-%d}']
   overlay:
     base_path: '/data/images'
     storage_path: '{date:%Y-%m-%d}-{mode}/'

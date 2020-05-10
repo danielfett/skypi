@@ -1,6 +1,4 @@
-
 import logging
-from contextlib import contextmanager
 from time import sleep
 
 try:
@@ -64,6 +62,7 @@ class FakeCamera:
 
     def __exit__(self, *args):
         pass
+
 
 def fake_camera():
     global SkyPiCamera

@@ -28,6 +28,7 @@ if __name__ == "__main__":
     log_handler.setLevel(logging.DEBUG if args.verbose else logging.INFO)
     logging.getLogger().addHandler(log_handler)
     logging.getLogger().setLevel(logging.DEBUG)
+
     if args.fake_camera:
         logging.info("Using fake camera")
         import skypi.camera

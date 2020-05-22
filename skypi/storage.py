@@ -215,6 +215,7 @@ class SkyPiFile:
     filestore: SkyPiFileStore
     path: Path
     timestamp: Optional[datetime]
+    brightness: Optional[float] = None
 
     def __init__(
         self,
@@ -239,6 +240,9 @@ class SkyPiFile:
             return
         if self.path.exists():
             self.path.replace(self.orig_path)
+
+    def get_size(self):
+        return self.path.stat().st_size
 
     def __str__(self):
         return str(self.path)

@@ -39,8 +39,7 @@ mqtt:
   client_name: skypic
   server: infopi.fritz.box
   topic: system/skypi/
-watchdog_reset: ['/usr/bin/sudo', '/sbin/poweroff']
-#watchdog_reset: ['test']
+#watchdog_reset: ['/usr/bin/sudo', '/sbin/poweroff']
 modes:
   night: # raspistill -ISO 800 -ex verylong -ss 5000000 -dt -awb cloud -a 12 --timelapse 0 -o ndk-%09d.jpg -t 999999999
     camera:
@@ -49,12 +48,13 @@ modes:
       sensor_mode: 3
       iso: 1600
       exposure_mode: 'sports'
-      awb_mode: 'cloudy'
-      #awb_gains: [5.5, 5]
+      awb_mode: 'off'
+      awb_gains: [1.51, 1.95]
       annotate_text_size: 32
       #drc_strength: medium
       framerate: 0.1
-      still_stats: True
+      #still_stats: True
+    #target_brightness: 32
     capture_options:
       format: jpeg
       burst: True
@@ -68,20 +68,21 @@ modes:
           name: timelapse
           cmd: 
             encode: ['ffmpeg', '-hide_banner', '-loglevel', 'panic', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'scale=1640:1232', '-vcodec', 'mpeg4', '-qscale:v', '5', '-f', 'mp4', '{filename_out}']
-          output: timelapse
+        output: timelapse
       - cls: SkyPiOverlay
         options:
           name: overlay
           cmd:
             init: ['convert', '-size', '3280x2464', 'xc:black', '{filename_out}']
             iterate: ['convert', '{filename_out}', '{filename_in}', '-gravity', 'center', '-compose', 'lighten', '-composite', '-format', 'jpg', '{filename_out}']
-          output: overlay
+          max_brightness: 32
+        output: overlay
       - cls: SkyPiThumbnailGif
         options: 
           name: gif
           cmd:
             extract: ['exiftool', '-b', '-ThumbnailImage', '{filename_in}']
-            convert: ['ffmpeg', '-hide_banner', '-loglevel', 'panic', '-y', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'fps=7,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', '-loop', '0', '{filename_out}']
+            convert: ['ffmpeg', '-hide_banner', '-loglevel', 'panic', '-y', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'fps=7,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', '-loop', '0', '-f', 'gif', '{filename_out}']
           repeat_last_image: 10
           length: 50
         output: animation
@@ -94,10 +95,11 @@ modes:
       iso: 100
       annotate_text_size: 32
       shutter_speed: 0
-      still_stats: True
+      #still_stats: True
       sensor_mode: 3
-      framerate_range: [0.5, 15]
+      framerate_range: [0.1, 15]
       drc_strength: high
+    #target_brightness: 150
     capture_options:
       format: jpeg
       burst: False
@@ -112,13 +114,6 @@ modes:
           cmd: 
             encode: ['ffmpeg', '-hide_banner', '-loglevel', 'panic', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'scale=1640:1232', '-vcodec', 'mpeg4', '-qscale:v', '5', '-f', 'mp4', '{filename_out}']
         output: timelapse
-      - cls: SkyPiOverlay
-        options:
-          name: overlay
-          cmd:
-            init: ['convert', '-size', '3280x2464', 'xc:white', '{filename_out}']
-            iterate: ['convert', '{filename_out}', '{filename_in}', '-gravity', 'center', '-compose', 'darken', '-composite', '-format', 'jpg', '{filename_out}']
-        output: overlay
       - cls: SkyPiThumbnailGif
         options: 
           name: gif

@@ -1,3 +1,5 @@
 astral
 paho.mqtt
 pyyaml
+simple_pid
+PIL

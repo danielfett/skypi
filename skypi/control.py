@@ -1,6 +1,7 @@
 import io
 import logging
 import signal
+import sys
 from datetime import date, datetime, timedelta
 from threading import Thread
 from time import sleep
@@ -58,7 +59,7 @@ class SkyPiControl:
     def on_message(self, client, userdata, msg):
         base = self.settings["mqtt"]["topic"]
         topic = msg.topic[len(base) :]
-        payload = msg.payload.decode('utf-8').strip()
+        payload = msg.payload.decode("utf-8").strip()
         self.log.info(f"Received MQTT message on topic {topic} containing {payload}")
         if topic == "force_mode":
             self.forced_mode = payload
@@ -91,11 +92,13 @@ class SkyPiControl:
             sleep(5)
             if self.watchdog is None:
                 continue
-            if self.watchdog < datetime.now() - self.WATCHDOG_TIMEOUT:
+            if self.watchdog < (datetime.now() - self.WATCHDOG_TIMEOUT):
                 self.log.warn("Watchdog reset! Shutting down.")
                 self.publish("watchdog_timeout", "1")
                 sleep(3)
-                self.run_cmd(self.settings["watchdog_reset"])
+                if "watchdog_reset" in self.settings:
+                    self.run_cmd(self.settings["watchdog_reset"])
+                sys.exit()
 
     def calculate_event_times(self):
         events_yesterday = sun(
@@ -163,6 +166,8 @@ class SkyPiControl:
         started = datetime.now()
         canonical_date = self.canonical_date
 
+        target_brightness = settings.get("target_brightness", None)
+
         self.log.info(
             f"Started mode {mode}\n - started: {started}\n - canonical_date: {canonical_date}"
         )
@@ -172,7 +177,8 @@ class SkyPiControl:
         )
 
         self.watchdog = datetime.now()
-        with SkyPiCamera(settings["camera"]) as camera:
+
+        with SkyPiCamera(settings["camera"], target_brightness) as camera:
 
             self.watchdog = datetime.now()
 
@@ -203,9 +209,11 @@ class SkyPiControl:
 
                 stream.truncate()
                 stream.seek(0)
-                output.add_image(
-                    stream, timestamp=image_time,
+                im = output.add_image(
+                    stream, timestamp=image_time, calc_brightness=True,
                 )
+
+                camera.update_brightness(im.brightness)
 
                 self.log.debug(
                     f"Image conversion done (took {(datetime.now()-conversion_time).total_seconds()}s)"
@@ -214,17 +222,18 @@ class SkyPiControl:
 
                 now_tz = datetime.now(pytz.utc)
 
-                if now_tz > self.next_switch or self.stop:
-                    self.log.info("Finishing recording.")
-                    break
-
                 in_period = (now_tz - self.last_switch).total_seconds()
                 period_percent = (in_period / self.total_period_time) * 100
 
+                awb_red, awb_blue = camera.awb_gains
                 status = {
-                    "capture/exposure_speed": camera.exposure_speed / 1000000,
-                    "capture/iso": repr(camera.iso),
-                    "capture/awb_gains": repr(camera.awb_gains),
+                    "capture/exposure_speed": camera.exposure_speed,
+                    "capture/actual_brightness": im.brightness,
+                    "capture/iso": camera.iso,
+                    "capture/awb_gains/red": float(round(awb_red, 2)),
+                    "capture/awb_gains/blue": float(round(awb_blue, 2)),
+                    "capture/gains/digital": float(round(camera.digital_gain, 2)),
+                    "capture/gains/analog": float(round(camera.analog_gain, 2)),
                     "capture/exposure_duration": (
                         conversion_time - image_time
                     ).total_seconds(),
@@ -233,6 +242,10 @@ class SkyPiControl:
 
                 for topic, message in status.items():
                     self.publish(topic, message)
+
+                if now_tz > self.next_switch or self.stop:
+                    self.log.info("Finishing recording.")
+                    break
 
                 stream.seek(0)
                 image_time = datetime.now()

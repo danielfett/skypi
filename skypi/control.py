@@ -5,7 +5,7 @@ import sys
 from datetime import date, datetime, timedelta
 from threading import Thread
 from time import sleep
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 import paho.mqtt.client as mqtt
 import pytz
@@ -15,6 +15,47 @@ from astral.sun import sun
 from .camera import SkyPiCamera
 from .output import SkyPiOutput
 from .storage import SkyPiFileManager
+
+
+class SkyPiWatchdog(Thread):
+    def __init__(self, timeout_seconds: Optional[int], reset_cmd: Optional[List]):
+        super().__init__()
+        self.timeout = (
+            timedelta(seconds=timeout_seconds) if timeout_seconds is not None else None
+        )
+        self.reset_cmd = reset_cmd
+        self.last_ping = None
+
+    def run(self):
+        if self.timeout is None:
+            return
+        while not self.shutdown:
+            sleep(5)
+            self.check()
+
+    def check(self):
+        if self.last_ping is None:
+            return
+
+        elapsed = datetime.now() - self.last_ping
+
+        if elapsed < self.timeout:
+            return
+
+        self.log.warn(
+            f"Watchdog reset after {elapsed.total_seconds()}s! Shutting down."
+        )
+        if self.reset_cmd is not None:
+            self.publish("watchdog_timeout", elapsed.total_seconds())
+            sleep(3)
+            self.run_cmd(self.reset_cmd)
+        sys.exit()
+
+    def ping(self):
+        self.last_ping = datetime.now()
+
+    def pause(self):
+        self.last_ping = None
 
 
 class SkyPiControl:
@@ -27,7 +68,7 @@ class SkyPiControl:
     current_mode: Optional[str] = None
     forced_mode: Optional[str] = None
 
-    watchdog: Optional[datetime] = None
+    watchdog: SkyPiWatchdog
     file_managers: Dict[str, SkyPiFileManager]
 
     log: logging.Logger
@@ -47,8 +88,8 @@ class SkyPiControl:
         self.mqtt_client.loop_start()
 
         self.location = LocationInfo(**self.settings["location"])
-        watchdog_timer = Thread(target=self.watchdog_thread, daemon=True)
-        watchdog_timer.start()
+        self.watchdog = SkyPiWatchdog(**self.settings["watchdog"])
+        self.watchdog.start()
         signal.signal(signal.SIGINT, self.signal_handler)
 
         self.file_managers: Dict[str, SkyPiFileManager] = {
@@ -86,19 +127,6 @@ class SkyPiControl:
         topic = self.settings["mqtt"]["topic"] + ext
         self.log.debug(f"mqtt: {topic}: {message}")
         self.mqtt_client.publish(topic, message)
-
-    def watchdog_thread(self):
-        while not self.shutdown:
-            sleep(5)
-            if self.watchdog is None:
-                continue
-            if self.watchdog < (datetime.now() - self.WATCHDOG_TIMEOUT):
-                self.log.warn("Watchdog reset! Shutting down.")
-                self.publish("watchdog_timeout", "1")
-                sleep(3)
-                if "watchdog_reset" in self.settings:
-                    self.run_cmd(self.settings["watchdog_reset"])
-                sys.exit()
 
     def calculate_event_times(self):
         events_yesterday = sun(
@@ -176,11 +204,11 @@ class SkyPiControl:
             self.file_managers, settings["processors"], date=canonical_date, mode=mode,
         )
 
-        self.watchdog = datetime.now()
+        self.watchdog.ping()
 
         with SkyPiCamera(settings["camera"], target_brightness) as camera:
 
-            self.watchdog = datetime.now()
+            self.watchdog.ping()
 
             stream = io.BytesIO()
 
@@ -191,7 +219,7 @@ class SkyPiControl:
 
             for _ in camera.capture_continuous(stream, **settings["capture_options"]):
                 # Touch the watchdog
-                self.watchdog = datetime.now()
+                self.watchdog.ping()
                 conversion_time = datetime.now()
 
                 # Check if we need to update the camera settings
@@ -254,9 +282,9 @@ class SkyPiControl:
                 )
                 self.log.debug(f"Next image: {camera.annotate_text}")
 
+        self.watchdog.pause()
         stream.close()
         output.close()
 
-        self.watchdog = None
         finished = datetime.now()
         self.log.info(f"Finished at {finished}; watchdog disabled.")

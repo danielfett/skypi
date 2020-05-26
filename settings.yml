@@ -39,7 +39,9 @@ mqtt:
   client_name: skypic
   server: infopi.fritz.box
   topic: system/skypi/
-#watchdog_reset: ['/usr/bin/sudo', '/sbin/poweroff']
+watchdog:
+  timeout_seconds: 360
+  reset_cmd: ['/usr/bin/sudo', '/sbin/poweroff']
 modes:
   night: # raspistill -ISO 800 -ex verylong -ss 5000000 -dt -awb cloud -a 12 --timelapse 0 -o ndk-%09d.jpg -t 999999999
     camera:

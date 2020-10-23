@@ -204,6 +204,8 @@ class SkyPiControl:
             elif self.current_mode in self.settings["modes"]:
                 self.log.debug(f"Starting mode {self.current_mode}")
                 self.run_mode(self.current_mode)
+                for _, filemanager in self.file_managers.items():
+                    filemanager.cleanup()
             self.stop = False
 
         for _, filemanager in self.file_managers.items():

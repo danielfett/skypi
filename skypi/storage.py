@@ -85,6 +85,7 @@ class ModeWildcard(Wildcard):
 
 class SkyPiFileManager:
     uploader: Optional[SkyPiUploader] = None
+    retain_days: Optional[int]
 
     def __init__(
         self,
@@ -101,6 +102,7 @@ class SkyPiFileManager:
         self.base_path = Path(base_path)
         self.storage_path = storage_path
         self.file_pattern = file_pattern
+        self.retain_days = retain_days
 
         if latest_path is not None:
             self.latest_path = self.base_path / latest_path
@@ -110,8 +112,7 @@ class SkyPiFileManager:
         else:
             self.latest_path = None
 
-        if retain_days is not None:
-            self.cleanup(retain_days)
+        self.cleanup()
 
         if upload:
             self.uploader = SkyPiUploader(self, name, **upload)
@@ -147,9 +148,11 @@ class SkyPiFileManager:
             manager=self,
         )
 
-    def cleanup(self, retain_days):
-        cutoff = datetime.now() - timedelta(days=retain_days)
-        self.log.info(f"Removing files older than {retain_days} days ({cutoff}).")
+    def cleanup(self):
+        if self.retain_days is None:
+            return
+        cutoff = datetime.now() - timedelta(days=self.retain_days)
+        self.log.info(f"Removing files older than {self.retain_days} days ({cutoff}).")
         for file in self.get_existing_folders():
             self.log.debug(f"Folder {file.path} is from {file.date:%Y-%m-%d}.")
             if file.date < cutoff:

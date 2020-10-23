@@ -74,7 +74,7 @@ class SkyPiControl:
     file_managers: Dict[str, SkyPiFileManager]
 
     log: logging.Logger
-    mqtt_client: mqtt.Client
+    mqtt_client: Optional[mqtt.Client]
     location: LocationInfo
 
     update_camera_settings: Dict[str, Any] = {}
@@ -86,11 +86,14 @@ class SkyPiControl:
         self.configure_logging(settings["log"])
 
         self.settings = settings
-        self.mqtt_client = mqtt.Client(self.settings["mqtt"]["client_name"])
-        self.mqtt_client.on_connect = self.on_connect
-        self.mqtt_client.on_message = self.on_message
-        self.mqtt_client.connect(self.settings["mqtt"]["server"])
-        self.mqtt_client.loop_start()
+        if 'mqtt' in self.settings:
+            self.mqtt_client = mqtt.Client(self.settings["mqtt"]["client_name"])
+            self.mqtt_client.on_connect = self.on_connect
+            self.mqtt_client.on_message = self.on_message
+            self.mqtt_client.connect(self.settings["mqtt"]["server"])
+            self.mqtt_client.loop_start()
+        else:
+            self.mqtt_client = None
 
         self.location = LocationInfo(**self.settings["location"])
         self.watchdog = SkyPiWatchdog(**self.settings["watchdog"])
@@ -136,6 +139,8 @@ class SkyPiControl:
         self.shutdown = True
 
     def publish(self, ext, message):
+        if self.mqtt_client is None:
+            return
         topic = self.settings["mqtt"]["topic"] + ext
         self.log.debug(f"mqtt: {topic}: {message}")
         self.mqtt_client.publish(topic, message)

@@ -65,7 +65,7 @@ watchdog:
   timeout_seconds: 180
   reset_cmd: ['/usr/bin/sudo', '/sbin/poweroff']
 modes:
-  night: # raspistill -ISO 800 -ex verylong -ss 5000000 -dt -awb cloud -a 12 --timelapse 0 -o ndk-%09d.jpg -t 999999999
+  night:
     camera:
       resolution: [3280, 2464]
       shutter_speed: 10000000
@@ -75,10 +75,7 @@ modes:
       awb_mode: 'off'
       awb_gains: [1.51, 1.95]
       annotate_text_size: 32
-      #drc_strength: medium
       framerate: 0.1
-      #still_stats: True
-    #target_brightness: 32
     capture_options:
       format: jpeg
       burst: True
@@ -133,7 +130,7 @@ modes:
           repeat_last_image: 10
           length: 50
         output: animation
-  day: # raspistill -ISO 800 -ex verylong -ss 5000000 -dt -awb cloud -a 12 --timelapse 0 -o ndk-%09d.jpg -t 999999999
+  day:
     camera:
       resolution: [3280, 2464]
       annotate_text_size: 16
@@ -142,11 +139,9 @@ modes:
       iso: 100
       annotate_text_size: 32
       shutter_speed: 0
-      #still_stats: True
       sensor_mode: 3
       framerate_range: [0.1, 15]
       drc_strength: high
-    #target_brightness: 150
     capture_options:
       format: jpeg
       burst: False

@@ -1,11 +1,28 @@
+# Note: Where variables are available, substitution is performed using python3's format() function.
+
+# REQUIRED: log file location
 log: '/data/images/log/log.txt'
+# REQUIRED: file storages; configure one file storage per type of files; storage names are referenced below
 files:
-  images:
-    base_path: '/data/images'
-    storage_path: '{date:%Y-%m-%d}-{mode}/images/'
+  # REQUIRED: storage name
+  # 'images' is special: it is the default handler for all images; all other file storages are optional
+  images: 
+    # REQUIRED: base path for actual files and "latest" files- no variable substitution is applied
+    base_path: '/data/images' 
+    # REQUIRED: variable path contents appended to base path; e.g.: '{date:%Y-%m-%d}-{mode}/images/'
+    # Variables available are:
+    #  - date: when the file sequence was started, format according to strptime: https://docs.python.org/3/library/datetime.html#strftime-strptime-behavior
+    #  - mode: mode (see below) in which the file sequence was started
+    storage_path: '{date:%Y-%m-%d}-{mode}/images/' 
+    # REQUIRED: actual filename; final storage path is base_path + storage_path + file_pattern
+    # Variables available are:
+    #  - timestamp: when the file was created, format according to strptime: https://docs.python.org/3/library/datetime.html#strftime-strptime-behavior
     file_pattern: 'ndk-{timestamp:%Y-%m-%d-%H-%M-%S}.jpg'
+    # OPTIONAL: path for the "latest" files (reference to latest file created); will be appended to base_path
     latest_path: ''
+    # OPTIONAL: filename for "latest" file; final storage path is base_path + latest_path + latest_filename
     latest_filename: 'latest.jpg'
+    # REQUIRED: delete files after this number of days
     retain_days: 4
   timelapse:
     base_path: '/data/images'
@@ -14,6 +31,11 @@ files:
     latest_path: ''
     latest_filename: 'latest-timelapse.mp4'
     retain_days: 30
+    # OPTIONAL: run this command on finished files. 
+    # Variables available:
+    #  - filename: will be replaced by the full path of the created file
+    #  - mode: as above
+    #  - date: as above
     upload:
       cmd: ['/usr/local/bin/youtubeuploader_linux_armv7', '-filename', '{filename}', '-description', 'Automatic recording of the {mode} sky over Niederkassel. Recorded on {date:%Y-%m-%d}. Recorded using a raspberry pi and a wide-angle camera.', '-title', '{mode} sky over Niederkassel: {date:%Y-%m-%d}']
   overlay:
@@ -52,20 +74,28 @@ files:
     latest_filename: 'latest-animation.gif'
     retain_days: 1
 
-
+# REQUIRED: location to calculate sunrise and sunset; timezone is required as well
 location: 
   latitude: 50.8
   longitude: 7
   timezone: Europe/Berlin
+# OPTIONAL: mqtt server to send status information to
 mqtt:
   client_name: skypic
   server: infopi.fritz.box
   topic: system/skypi/
+# OPTIONAL: the watchdog ensures that the device is rebooted when the camera hangs
 watchdog:
   timeout_seconds: 180
   reset_cmd: ['/usr/bin/sudo', '/sbin/poweroff']
+
+# REQUIRED: define the camera modes and output behavior for "night" and "day" modes. 
 modes:
   night:
+    # REQUIRED: camera settings; valid settings: "resolution", "framerate", "sensor_mode", "annotate_text_size", "awb_mode", "exposure_mode", "iso", "shutter_speed", "awb_gains"
+    # For details, see https://picamera.readthedocs.io/en/release-1.13/api_camera.html
+    # Please note that there are many subtleties with the camera settings that can easily lead to lock-ups (device needs a restart). 
+    # For details, please read carefully: https://picamera.readthedocs.io/en/release-1.13/fov.html
     camera:
       resolution: [3280, 2464]
       shutter_speed: 10000000
@@ -76,26 +106,41 @@ modes:
       awb_gains: [1.51, 1.95]
       annotate_text_size: 32
       framerate: 0.1
+    # REQUIRED: options for storing files; for valid values see https://picamera.readthedocs.io/en/release-1.13/api_camera.html#picamera.PiCamera.capture
     capture_options:
       format: jpeg
       burst: True
       quality: 95
       thumbnail: [328, 246, 80]
+    # REQUIRED: how long to wait between captures
     wait_between: 0.1
+    # OPTIONAL: text to annotate the pictures with
+    # Variables available:
+    #  - timestamp: when the image was taken, format according to strptime: https://docs.python.org/3/library/datetime.html#strftime-strptime-behavior
     annotation: 'NDK SkyPi night {timestamp:%Y-%m-%d %H:%M:%S} UTC'
+    # REQUIRED: the captured images will be passed to the image processors defined here (can be empty, i.e., '[]')
     processors:
-      - cls: SkyPiTimelapse
+      # REQUIRED: cls defines the python class of the image processor
+      - cls: SkyPiTimelapse # create a timelapse from all available images in the current run of the specified mode using an external encoder
         options:
-          name: timelapse
-          cmd: 
+          name: timelapse # a custom name for the processor - used for logging
+          cmd: # external commands - SkyPiTimelapse needs only an "encode" command
+            # the 'encode' command is called when all images have been taken; the image files are piped to STDIN
+            # Variables available:
+            #  - filename_out: where the file should be stored (can be a temporary filename)
             encode: ['ffmpeg', '-hide_banner', '-loglevel', 'panic', '-y', '-r', '20', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'scale=1640:1232', '-vcodec', 'mpeg4', '-qscale:v', '5', '-f', 'mp4', '{filename_out}']
-        output: timelapse
-      - cls: SkyPiOverlay
+        output: timelapse # file storage (reference to a name defined in 'files')
+      - cls: SkyPiOverlay # combine all images in the current run of the mode into one image using an external image manipulation tool
         options:
           name: overlay_normalized_15
           cmd:
+            # the 'init' command is run once before images are added; this can be used to create an initial all-black image
             init: ['convert', '-size', '3280x2464', 'xc:black', '{filename_out}']
+            # the 'iterate' command is run for each image; the image data is piped to STDIN
+            # Variables available:
+            #  - filename_out: where the file should be stored (can be a temporary filename)
             iterate: ['convert', '{filename_out}', 'jpg:-', '-gravity', 'center', '-compose', 'lighten', '-composite', '-format', 'jpg', '{filename_out}']
+          # OPTIONAL: if 'target_brightness' is given, SkyPiOverlay performs a normalization of the input images to avoid over-exposed pictures 
           target_brightness: 15
         output: overlay_normalized_15
       - cls: SkyPiOverlay
@@ -121,13 +166,16 @@ modes:
             init: ['convert', '-size', '3280x2464', 'xc:black', '{filename_out}']
             iterate: ['convert', '{filename_out}', '-format', 'jpg', '-', '-gravity', 'center', '-compose', 'lighten', '-composite', '-format', 'jpg', '{filename_out}']
         output: overlay
-      - cls: SkyPiThumbnailGif
+      - cls: SkyPiThumbnailGif # continuously create an animated GIF as a preview from the last x images taken
         options: 
           name: gif
           cmd:
+            # SkyPiThumbnailGif works by extracting the thumbnail images from the image files
             extract: ['exiftool', '-b', '-ThumbnailImage', '{filename_in}']
             convert: ['ffmpeg', '-hide_banner', '-loglevel', 'panic', '-y', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-i', '-', '-vf', 'fps=7,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', '-loop', '0', '-f', 'gif', '{filename_out}']
+          # REQUIRED: repeat last image to avoid too-quick loops
           repeat_last_image: 10
+          # REQUIRED: how many pictures to take into account
           length: 50
         output: animation
   day:

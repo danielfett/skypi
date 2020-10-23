@@ -70,7 +70,7 @@ class SkyPiControl:
     current_mode: Optional[str] = None
     forced_mode: Optional[str] = None
 
-    watchdog: SkyPiWatchdog
+    watchdog: Optional[SkyPiWatchdog]
     file_managers: Dict[str, SkyPiFileManager]
 
     log: logging.Logger
@@ -96,8 +96,11 @@ class SkyPiControl:
             self.mqtt_client = None
 
         self.location = LocationInfo(**self.settings["location"])
-        self.watchdog = SkyPiWatchdog(**self.settings["watchdog"])
-        self.watchdog.start()
+        if 'watchdog' in self.settings:
+            self.watchdog = SkyPiWatchdog(**self.settings["watchdog"])
+            self.watchdog.start()
+        else:
+            self.watchdog = None
 
         self.file_managers: Dict[str, SkyPiFileManager] = {
             name: SkyPiFileManager(name=name, **kwargs)
@@ -219,22 +222,26 @@ class SkyPiControl:
             self.file_managers, settings["processors"], date=canonical_date, mode=mode,
         )
 
-        self.watchdog.ping()
+        if self.watchdog is not None:
+            self.watchdog.ping()
 
         with SkyPiCamera(settings["camera"]) as camera:
 
-            self.watchdog.ping()
+            if self.watchdog is not None:
+                self.watchdog.ping()
 
             stream = io.BytesIO()
 
             image_time = datetime.now()
-            camera.annotate_text = settings["annotation"].format(timestamp=image_time)
+            if 'annotation' in settings:
+                camera.annotate_text = settings["annotation"].format(timestamp=image_time)
             # sleep(10)
             self.log.debug(f"First image: {camera.annotate_text}")
 
             for _ in camera.capture_continuous(stream, **settings["capture_options"]):
                 # Touch the watchdog
-                self.watchdog.ping()
+                if self.watchdog is not None:
+                    self.watchdog.ping()
                 conversion_time = datetime.now()
 
                 # Check if we need to update the camera settings
@@ -289,12 +296,14 @@ class SkyPiControl:
 
                 stream.seek(0)
                 image_time = datetime.now()
-                camera.annotate_text = settings["annotation"].format(
-                    timestamp=image_time
-                )
+                if 'annotation' in settings:
+                    camera.annotate_text = settings["annotation"].format(
+                        timestamp=image_time
+                    )
                 self.log.debug(f"Next image: {camera.annotate_text}")
 
-        self.watchdog.pause()
+        if self.watchdog is not None:
+            self.watchdog.pause()
         stream.close()
         output.close()
 

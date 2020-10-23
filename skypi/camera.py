@@ -52,7 +52,6 @@ class SkyPiCamera(PiCamera):
     }
     SLEEP = 40
 
-
     def __init__(self, camera_settings):
         self.log = logging.getLogger("skypicamera")
         self.CAPTURE_TIMEOUT = 120

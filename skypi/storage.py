@@ -92,8 +92,8 @@ class SkyPiFileManager:
         base_path,
         storage_path,
         file_pattern,
-        latest_path,
-        latest_filename,
+        latest_path=None,
+        latest_filename=None,
         retain_days=None,
         upload=None,
     ):

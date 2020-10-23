@@ -1,7 +1,7 @@
 # SkyPi - Raspberry Pi Sky Timelapse Tool
 
 SkyPi is a software to create timelapse and startrail images using a Raspberry Pi camera.
-
+<img src="./examples/overlay.jpg" width="300">
 ## Features
 
  * Automatic switch between "day" and "night" modes based on geographic location
@@ -28,12 +28,12 @@ SkyPi is a software to create timelapse and startrail images using a Raspberry P
  7. Ensure that SkyPi is run on every boot. Adapt [skypi.service](./skypi.service) to set up a Systemd service (see [here](https://www.linode.com/docs/guides/start-service-at-boot/) for details).
 
 ## Examples
+### Thumbnail Animation
+![Thumbnail](examples/animation.gif)
 
 ### Overlay (Startrail) Image Processor
 ![Overlay (startrail) image](examples/overlay.jpg)
 
-### Thumbnail Animation
-![Thumbnail](examples/animation.gif)
 
 ### Timelapse
-[![Timelapse - Link to YouTube](https://img.youtube.com/vi/6erOVqfch5o/0.jpg)](https://www.youtube.com/watch?v=6erOVqfch5o)
+[![Timelapse - Link to YouTube](./examples/youtube.png)](https://www.youtube.com/watch?v=6erOVqfch5o)

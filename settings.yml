@@ -1,3 +1,4 @@
+log: '/data/images/log/log.txt'
 files:
   images:
     base_path: '/data/images'
@@ -22,6 +23,27 @@ files:
     latest_path: ''
     latest_filename: 'latest-overlay.jpg'
     retain_days: 30
+  overlay_normalized_15:
+    base_path: '/data/images'
+    storage_path: '{date:%Y-%m-%d}-{mode}/'
+    file_pattern: 'ndk-overlay-normalized-15.jpg'
+    latest_path: ''
+    latest_filename: 'latest-overlay-normalized-15.jpg'
+    retain_days: 30
+  overlay_normalized_25:
+    base_path: '/data/images'
+    storage_path: '{date:%Y-%m-%d}-{mode}/'
+    file_pattern: 'ndk-overlay-normalized-25.jpg'
+    latest_path: ''
+    latest_filename: 'latest-overlay-normalized-25.jpg'
+    retain_days: 30
+  overlay_normalized_20:
+    base_path: '/data/images'
+    storage_path: '{date:%Y-%m-%d}-{mode}/'
+    file_pattern: 'ndk-overlay-normalized-20.jpg'
+    latest_path: ''
+    latest_filename: 'latest-overlay-normalized-20.jpg'
+    retain_days: 30
   animation:
     base_path: '/data/images'
     storage_path: '{date:%Y-%m-%d}-{mode}/'
@@ -40,7 +62,7 @@ mqtt:
   server: infopi.fritz.box
   topic: system/skypi/
 watchdog:
-  timeout_seconds: 360
+  timeout_seconds: 180
   reset_cmd: ['/usr/bin/sudo', '/sbin/poweroff']
 modes:
   night: # raspistill -ISO 800 -ex verylong -ss 5000000 -dt -awb cloud -a 12 --timelapse 0 -o ndk-%09d.jpg -t 999999999
@@ -73,11 +95,34 @@ modes:
         output: timelapse
       - cls: SkyPiOverlay
         options:
+          name: overlay_normalized_15
+          cmd:
+            init: ['convert', '-size', '3280x2464', 'xc:black', '{filename_out}']
+            iterate: ['convert', '{filename_out}', 'jpg:-', '-gravity', 'center', '-compose', 'lighten', '-composite', '-format', 'jpg', '{filename_out}']
+          target_brightness: 15
+        output: overlay_normalized_15
+      - cls: SkyPiOverlay
+        options:
+          name: overlay_normalized_25
+          cmd:
+            init: ['convert', '-size', '3280x2464', 'xc:black', '{filename_out}']
+            iterate: ['convert', '{filename_out}', 'jpg:-', '-gravity', 'center', '-compose', 'lighten', '-composite', '-format', 'jpg', '{filename_out}']
+          target_brightness: 25
+        output: overlay_normalized_25
+      - cls: SkyPiOverlay
+        options:
+          name: overlay_normalized_20
+          cmd:
+            init: ['convert', '-size', '3280x2464', 'xc:black', '{filename_out}']
+            iterate: ['convert', '{filename_out}', 'jpg:-', '-gravity', 'center', '-compose', 'lighten', '-composite', '-format', 'jpg', '{filename_out}']
+          target_brightness: 20
+        output: overlay_normalized_20
+      - cls: SkyPiOverlay
+        options:
           name: overlay
           cmd:
             init: ['convert', '-size', '3280x2464', 'xc:black', '{filename_out}']
-            iterate: ['convert', '{filename_out}', '{filename_in}', '-gravity', 'center', '-compose', 'lighten', '-composite', '-format', 'jpg', '{filename_out}']
-          max_brightness: 32
+            iterate: ['convert', '{filename_out}', '-format', 'jpg', '-', '-gravity', 'center', '-compose', 'lighten', '-composite', '-format', 'jpg', '{filename_out}']
         output: overlay
       - cls: SkyPiThumbnailGif
         options: 

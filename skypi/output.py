@@ -6,6 +6,7 @@ from threading import Thread
 from typing import List, Dict
 from datetime import datetime
 from PIL import Image, ImageStat
+from PIL.ImageEnhance import Brightness
 import math
 
 from .storage import SkyPiFile, SkyPiFileManager
@@ -60,9 +61,9 @@ class SkyPiOutput:
         return p
 
     def add_image(
-        self, stream, timestamp: datetime, calc_brightness=False
+        self, stream, timestamp: datetime, 
     ) -> SkyPiFile:
-        file = self.image_processor.add_image(stream, timestamp, calc_brightness)
+        file = self.image_processor.add_image(stream, timestamp)
         for processor in self.processors:
             processor.add(file)
         return file
@@ -77,38 +78,19 @@ class SkyPiProcessor:
 
 
 class SkyPiImageProcessor(SkyPiProcessor):
-    BRIGHTNESS_BORDER_SIZE = [0.18, 0.24]
 
     def __init__(self, filestore):
         self.log = logging.getLogger("output")
         self.filestore = filestore
 
     def add_image(
-        self, stream, timestamp: datetime, calc_brightness: bool
+        self, stream, timestamp: datetime
     ) -> SkyPiFile:
         file = SkyPiFile(self.filestore, timestamp)
         # save image to disk
         with open(file.path, "wb") as outfile:
             self.log.debug(f"Writing image to {file.path}.")
             shutil.copyfileobj(stream, outfile, length=self.BUFFER_SHUTIL_COPY)
-
-        # calculate brightness?
-        if calc_brightness:
-            stream.seek(0)
-            with Image.open(stream) as im:
-                crop_area = [
-                    self.BRIGHTNESS_BORDER_SIZE[0] * im.width,
-                    self.BRIGHTNESS_BORDER_SIZE[1] * im.height,
-                    (1 - self.BRIGHTNESS_BORDER_SIZE[0]) * im.width,
-                    (1 - self.BRIGHTNESS_BORDER_SIZE[1]) * im.height,
-                ]
-
-                stat = ImageStat.Stat(im.crop(crop_area))
-                r, g, b = stat.mean
-                brightness = math.sqrt(
-                    0.299 * (r ** 2) + 0.587 * (g ** 2) + 0.114 * (b ** 2)
-                )
-                file.brightness = brightness
 
         self.log.debug("...creating symlink")
         file.finish()
@@ -170,30 +152,47 @@ class SkyPiFileProcessor(Thread, SkyPiCommandRunner, SkyPiProcessor):
 
 
 class SkyPiOverlay(SkyPiFileProcessor):
+    BRIGHTNESS_BORDER_SIZE = [0.18, 0.24]
     ADD_OLD_FILES = True
 
-    def __init__(self, max_brightness=None, **kwargs):
+    def __init__(self, target_brightness=None, **kwargs):
         super().__init__(**kwargs)
-        self.max_brightness = max_brightness
+        self.target_brightness = target_brightness
 
     def start_cmd(self):
         proc = self.run_cmd(self.cmd["init"], filename_out=self.output_file.path,)
         proc.communicate()
 
-    def process(self, file: SkyPiFile):
-        if (
-            self.max_brightness is not None
-            and file.brightness is not None
-            and file.brightness > self.max_brightness
-        ):
-            self.log.debug(f"Skipping image: {file.brightness} > {self.max_brightness}")
+    def write_brightness_normalized(self, file: SkyPiFile, stream):
+        if self.target_brightness is None:
+            stream.write(file.path.read_bytes())
             return
+
+        with Image.open(file.path) as im:
+            crop_area = [
+                self.BRIGHTNESS_BORDER_SIZE[0] * im.width,
+                self.BRIGHTNESS_BORDER_SIZE[1] * im.height,
+                (1 - self.BRIGHTNESS_BORDER_SIZE[0]) * im.width,
+                (1 - self.BRIGHTNESS_BORDER_SIZE[1]) * im.height,
+            ]
+
+            stat = ImageStat.Stat(im.crop(crop_area))
+            r, g, b = stat.mean
+            brightness = math.sqrt(
+                0.299 * (r ** 2) + 0.587 * (g ** 2) + 0.114 * (b ** 2)
+            )
+            factor = self.target_brightness/brightness
+            enhancer = Brightness(im)
+            enhancer.enhance(factor).save(stream, format='JPEG', quality=90)
+
+    def process(self, file: SkyPiFile):
         self.log.debug(f"...adding to overlay image {self.output_file.path}.")
         overlay_proc = self.run_cmd(
             self.cmd["iterate"],
             filename_out=self.output_file.path,
-            filename_in=file.path,
+            pipe=True,
         )
+        self.write_brightness_normalized(file, overlay_proc.stdin)
         overlay_proc.communicate()
 
     def stop_cmd(self):

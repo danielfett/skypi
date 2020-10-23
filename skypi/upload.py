@@ -39,10 +39,10 @@ class SkyPiUploader(Thread, SkyPiCommandRunner):
 
     def run(self):
         while not self.stop_requested:
-            self.sleep(self.RECHECK_TIME)
             for file in self.get_uploads_todo():
                 if file.get_size() < self.MIN_UPLOAD_SIZE:
-                    self.log.debug(f"Skipping file which is smaller than {self.MIN_UPLOAD_SIZE}: {file}")
+                    self.log.debug(f"Skipping file which is smaller than {self.MIN_UPLOAD_SIZE} bytes: {file}")
+                    continue
                 if self.upload(file):
                     self.upload_status["uploaded"].append(self.canonicalize(file))
                     self.save_upload_status()
@@ -50,6 +50,7 @@ class SkyPiUploader(Thread, SkyPiCommandRunner):
                     self.sleep(self.ERROR_WAIT_TIME)
                 if self.stop_requested:
                     return
+            self.sleep(self.RECHECK_TIME)
 
     def sleep(self, time: int):
         for i in range(time):

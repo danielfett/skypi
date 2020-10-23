@@ -1,5 +1,6 @@
 import io
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import signal
 import sys
 from datetime import date, datetime, timedelta
@@ -19,7 +20,8 @@ from .storage import SkyPiFileManager
 
 class SkyPiWatchdog(Thread):
     def __init__(self, timeout_seconds: Optional[int], reset_cmd: Optional[List]):
-        super().__init__()
+        super().__init__(daemon=True)
+        self.log = logging.getLogger("watchdog")
         self.timeout = (
             timedelta(seconds=timeout_seconds) if timeout_seconds is not None else None
         )
@@ -29,7 +31,7 @@ class SkyPiWatchdog(Thread):
     def run(self):
         if self.timeout is None:
             return
-        while not self.shutdown:
+        while True:
             sleep(5)
             self.check()
 
@@ -79,6 +81,9 @@ class SkyPiControl:
 
     def __init__(self, settings: Dict[str, Any]):
         self.log = logging.getLogger()
+        signal.signal(signal.SIGINT, self.signal_handler)
+
+        self.configure_logging(settings["log"])
 
         self.settings = settings
         self.mqtt_client = mqtt.Client(self.settings["mqtt"]["client_name"])
@@ -90,18 +95,25 @@ class SkyPiControl:
         self.location = LocationInfo(**self.settings["location"])
         self.watchdog = SkyPiWatchdog(**self.settings["watchdog"])
         self.watchdog.start()
-        signal.signal(signal.SIGINT, self.signal_handler)
 
         self.file_managers: Dict[str, SkyPiFileManager] = {
             name: SkyPiFileManager(name=name, **kwargs)
             for (name, kwargs) in self.settings["files"].items()
         }
 
+    def configure_logging(self, filename):
+        handler = TimedRotatingFileHandler(filename, when="D", backupCount=7)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s  %(name)s  %(levelname)s \t%(message)s")
+        )
+        handler.setLevel(logging.DEBUG)
+        self.log.addHandler(handler)
+
     def on_message(self, client, userdata, msg):
         base = self.settings["mqtt"]["topic"]
         topic = msg.topic[len(base) :]
         payload = msg.payload.decode("utf-8").strip()
-        self.log.info(f"Received MQTT message on topic {topic} containing {payload}")
+        self.log.debug(f"Received MQTT message on topic {topic} containing {payload}")
         if topic == "force_mode":
             self.forced_mode = payload
             self.stop = True
@@ -194,8 +206,6 @@ class SkyPiControl:
         started = datetime.now()
         canonical_date = self.canonical_date
 
-        target_brightness = settings.get("target_brightness", None)
-
         self.log.info(
             f"Started mode {mode}\n - started: {started}\n - canonical_date: {canonical_date}"
         )
@@ -206,7 +216,7 @@ class SkyPiControl:
 
         self.watchdog.ping()
 
-        with SkyPiCamera(settings["camera"], target_brightness) as camera:
+        with SkyPiCamera(settings["camera"]) as camera:
 
             self.watchdog.ping()
 
@@ -237,11 +247,9 @@ class SkyPiControl:
 
                 stream.truncate()
                 stream.seek(0)
-                im = output.add_image(
-                    stream, timestamp=image_time, calc_brightness=True,
+                output.add_image(
+                    stream, timestamp=image_time,
                 )
-
-                camera.update_brightness(im.brightness)
 
                 self.log.debug(
                     f"Image conversion done (took {(datetime.now()-conversion_time).total_seconds()}s)"
@@ -256,7 +264,6 @@ class SkyPiControl:
                 awb_red, awb_blue = camera.awb_gains
                 status = {
                     "capture/exposure_speed": camera.exposure_speed,
-                    "capture/actual_brightness": im.brightness,
                     "capture/iso": camera.iso,
                     "capture/awb_gains/red": float(round(awb_red, 2)),
                     "capture/awb_gains/blue": float(round(awb_blue, 2)),
